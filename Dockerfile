@@ -66,3 +66,5 @@ EXPOSE 80
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# done
