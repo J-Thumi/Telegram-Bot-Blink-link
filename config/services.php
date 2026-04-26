@@ -1,6 +1,16 @@
 <?php
 
 return [
+    'blink' => [
+        'api_key' => env('BLINK_API_KEY'),
+        'invoice_amount' => env('BLINK_INVOICE_AMOUNT', 100), // Amount in satoshis
+        'graphql_url' => env('BLINK_GRAPHQL_URL', 'https://api.blink.sv/graphql'),
+    ],
+    'telegram' => [
+        'bot_token' => env('TELEGRAM_BOT_TOKEN'),
+        'channel_username' => env('TELEGRAM_CHANNEL_USERNAME'),
+        'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
+    ],
 
     /*
     |--------------------------------------------------------------------------
