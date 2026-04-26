@@ -53,7 +53,7 @@ class TelegramWebhookController extends Controller
     /**
      * Core logic for the purchase flow.
      */
-    protected function handlePurchaseCommand(string $chatId, string $telegramUserId)
+   protected function handlePurchaseCommand(string $chatId, string $telegramUserId)
     {
         // 1. Check if user already has an active, unpaid invoice
         $existingPurchase = Purchase::where('telegram_id', $telegramUserId)
@@ -88,6 +88,7 @@ class TelegramWebhookController extends Controller
         ]);
 
         Log::info("Invoice stored: {$invoice}");
+        
         // 4. Associate purchase with this invoice
         Purchase::create([
             'invoice_id' => $invoice->id,
@@ -95,27 +96,36 @@ class TelegramWebhookController extends Controller
         ]);
         Log::info("Purchase record created for user {$telegramUserId} with invoice ID {$invoice->id}");
 
-        // 5. Send the invoice to the user with a payment link for Bitika
-        $bitikaUrl = "https://bitika.xyz/pay?invoice=" . urlencode($invoice->payment_request);
+        // 5. Send main message with payment button (Bitika link only)
         $keyboard = [
             'inline_keyboard' => [
                 [
-                    ['text' => '💸 Pay via M-Pesa (Bitika)', 'url' => $bitikaUrl]
+                    ['text' => '💸 Pay via M-Pesa (Bitika)', 'url' => 'https://bitika.xyz']
                 ]
             ]
         ];
 
-        $messageText = sprintf(
+        $mainMessageText = sprintf(
             "⚡️ *Pay %s sats to get your invite link.*\n\n"
-            . "💰 Amount: `%s sats`\n"
-            . "🔗 Or copy this invoice: `%s`\n\n"
-            . "⏳ Invoice expires in 10 minutes.\n\n"
-            . "*Click the button below to pay via M-Pesa using Bitika:*",
+            . "💰 Amount: `%s sats`\n\n"
+            . "📌 *Instructions:*\n"
+            . "1️⃣ Click the button below to open Bitika\n"
+            . "2️⃣ Copy the invoice from the next message\n"
+            . "3️⃣ Paste it in Bitika and complete payment via M-Pesa\n"
+            . "4️⃣ Wait a few seconds for confirmation\n\n"
+            . "⏳ Invoice expires in 10 minutes.",
             $amountInSatoshis,
-            $amountInSatoshis,
+            $amountInSatoshis
+        );
+
+        $this->telegram->sendMessage($chatId, $mainMessageText, $keyboard);
+        // 6. Send invoice as separate message (copyable)
+        $invoiceMessageText = sprintf(
+            "`%s`",
             $invoice->payment_request
         );
 
-        $this->telegram->sendMessage($chatId, $messageText, $keyboard);
+        $this->telegram->sendMessage($chatId, $invoiceMessageText);
     }
+
 }
