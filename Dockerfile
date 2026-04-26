@@ -40,10 +40,11 @@ WORKDIR /var/www/html
 COPY . .
 
 # Copy Nginx configuration
-# COPY docker/nginx/default.conf /etc/nginx/sites-available/default
+COPY docker/nginx/default.conf /etc/nginx/sites-available/default
 
 # Copy Supervisor configuration
-# COPY docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/supervisor/conf.d/*.conf /etc/supervisor/conf.d/
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
