@@ -105,27 +105,31 @@ class TelegramWebhookController extends Controller
             ]
         ];
 
-        $mainMessageText = sprintf(
-            "⚡️ *Pay %s sats to get your invite link.*\n\n"
-            . "💰 Amount: `%s sats`\n\n"
-            . "📌 *Instructions:*\n"
-            . "1️⃣ Click the button below to open Bitika\n"
-            . "2️⃣ Copy the invoice from the next message\n"
-            . "3️⃣ Paste it in Bitika and complete payment via M-Pesa\n"
-            . "4️⃣ Wait a few seconds for confirmation\n\n"
-            . "⏳ Invoice expires in 10 minutes.",
-            $amountInSatoshis,
-            $amountInSatoshis
-        );
+       $mainMessageText = sprintf(
+        "⚡️ *Pay %s sats to get your invite link.*\n\n"
+        . "💰 Amount: `%s sats`\n\n"
+        . "📌 *Instructions:*\n"
+        . "1️⃣ Click the button below to open Bitika\n"
+        . "2️⃣ Copy the invoice from the NEXT message\n"
+        . "3️⃣ Paste it in Bitika and complete payment via M-Pesa\n"
+        . "4️⃣ Wait a few seconds for confirmation\n\n"
+        . "⏳ Invoice expires in 10 minutes.",
+        $amountInSatoshis,
+        $amountInSatoshis
+    );
 
-        $this->telegram->sendMessage($chatId, $mainMessageText, $keyboard);
-        // 6. Send invoice as separate message (copyable)
-        $invoiceMessageText = sprintf(
-            "`%s`",
-            $invoice->payment_request
-        );
+    $this->telegram->sendMessage($chatId, $mainMessageText, $keyboard);
+    
+    // 6. Send invoice as a SEPARATE message (only the invoice, no extra text)
+    $invoiceMessageText = sprintf(
+        "🔗 *Your Lightning Invoice:*\n\n"
+        . "`%s`\n\n"
+        . "📋 Tap and hold to copy the invoice above.",
+        $invoice->payment_request
+    );
 
-        $this->telegram->sendMessage($chatId, $invoiceMessageText);
+    $this->telegram->sendMessage($chatId, $invoiceMessageText);
+
     }
 
 }

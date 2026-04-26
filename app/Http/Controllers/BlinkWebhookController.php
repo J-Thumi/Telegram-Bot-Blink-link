@@ -17,57 +17,85 @@ class BlinkWebhookController extends Controller
         $this->telegram = $telegram;
     }
 
+    /**
+     * Handle incoming webhook from Blink when invoice is paid
+     * Callback URL: https://your-domain.com/api/blink/webhook
+     */
     public function handle(Request $request)
     {
-        // Log the raw webhook for debugging
+        // Log the raw request for debugging
         Log::info('Blink webhook received', $request->all());
 
         $payload = $request->all();
         
-        // Check for different webhook formats
-        $event = $payload['event'] ?? $payload['type'] ?? null;
+        // Check for receive.lightning event (payment received)
+        $eventType = $payload['eventType'] ?? null;
         
-        // Handle only invoice.paid events
-        if ($event !== 'invoice.paid') {
-            Log::info('Ignoring non-payment event', ['event' => $event]);
-            return response()->json(['status' => 'ignored']);
+        if ($eventType !== 'receive.lightning') {
+            Log::info('Ignoring non-payment event', ['eventType' => $eventType]);
+            return response()->json(['status' => 'ignored', 'eventType' => $eventType]);
         }
 
-        // Extract data from the webhook
-        $data = $payload['data'] ?? [];
+        // Extract transaction data
+        $transaction = $payload['transaction'] ?? [];
         
-        // Try different possible field names for payment hash
-        $paymentHash = $data['paymentHash'] ?? 
-                       $data['payment_hash'] ?? 
-                       $payload['paymentHash'] ?? 
-                       $payload['payment_hash'] ?? 
-                       null;
+        if (empty($transaction)) {
+            Log::error('Webhook missing transaction data', ['payload' => $payload]);
+            return response()->json(['error' => 'Missing transaction data'], 400);
+        }
 
+        // Get payment hash from initiationVia
+        $paymentHash = $transaction['initiationVia']['paymentHash'] ?? null;
+        
         if (!$paymentHash) {
-            Log::error('Webhook missing payment hash', ['payload' => $payload]);
+            Log::error('Webhook missing payment hash', ['transaction' => $transaction]);
             return response()->json(['error' => 'Missing payment hash'], 400);
         }
 
-        Log::info('Processing payment for invoice', ['payment_hash' => $paymentHash]);
+        // Get settlement amount in satoshis
+        $settlementAmount = $transaction['settlementAmount'] ?? 0;
+        
+        Log::info('Processing Lightning payment', [
+            'payment_hash' => $paymentHash,
+            'amount_sats' => $settlementAmount,
+            'status' => $transaction['status'],
+            'wallet_id' => $payload['walletId']
+        ]);
 
-        // Find the invoice by payment_hash (not by blink_id)
+        // Find the invoice by payment_hash
         $invoice = Invoice::where('payment_hash', $paymentHash)->first();
 
         if (!$invoice) {
-            Log::warning('Invoice not found for webhook', ['payment_hash' => $paymentHash]);
-            return response()->json(['status' => 'invoice_not_found']);
+            Log::warning('Invoice not found for webhook', [
+                'payment_hash' => $paymentHash,
+                'searching_in' => 'invoices table'
+            ]);
+            return response()->json(['status' => 'invoice_not_found', 'payment_hash' => $paymentHash]);
         }
 
         Log::info('Found invoice', [
             'invoice_id' => $invoice->id,
             'current_status' => $invoice->status,
-            'amount' => $invoice->amount_msat / 1000
+            'amount_sats' => $invoice->amount_msat / 1000,
+            'expected_amount' => $invoice->amount_msat / 1000,
+            'received_amount' => $settlementAmount
         ]);
 
         // Check if already processed
         if ($invoice->isPaid()) {
             Log::info('Invoice already marked as paid', ['invoice_id' => $invoice->id]);
-            return response()->json(['status' => 'already_processed']);
+            return response()->json(['status' => 'already_processed', 'invoice_id' => $invoice->id]);
+        }
+
+        // Verify amount matches (optional, with tolerance)
+        $expectedSats = $invoice->amount_msat / 1000;
+        if (abs($expectedSats - $settlementAmount) > 1) { // 1 sat tolerance
+            Log::warning('Payment amount mismatch', [
+                'expected' => $expectedSats,
+                'received' => $settlementAmount,
+                'invoice_id' => $invoice->id
+            ]);
+            // Still process but log warning
         }
 
         // Mark invoice as paid
@@ -78,7 +106,10 @@ class BlinkWebhookController extends Controller
         $purchase = Purchase::where('invoice_id', $invoice->id)->first();
 
         if (!$purchase) {
-            Log::error('No purchase record found for paid invoice', ['invoice_id' => $invoice->id]);
+            Log::error('No purchase record found for paid invoice', [
+                'invoice_id' => $invoice->id,
+                'invoice' => $invoice->toArray()
+            ]);
             return response()->json(['error' => 'Purchase not found'], 500);
         }
 
@@ -92,46 +123,37 @@ class BlinkWebhookController extends Controller
             expireInSeconds: 604800 // 7 days
         );
 
-        Log::info('Invite link generation result', [
-            'invite_link_data' => $inviteLinkData
-        ]);
-
         if (!$inviteLinkData) {
-            if(config('app.env') === "local"){
-                Log::warning('Failed to create invite link, using placeholder. In local', ['user_id' => $telegramUserId]);
-                $inviteLinkData = [
-                    'invite_link' => 'https://t.me/joinchat/EXAMPLE', // Placeholder link
-                    'id' => 'placeholder_invite_id'
-                ];
-            } else {
-                Log::critical('Failed to create invite link for user', ['user_id' => $telegramUserId]);
-                $this->telegram->sendMessage(
-                    $telegramUserId, 
-                    "❌ Payment confirmed but failed to generate invite link.\n\n"
-                    . "Please contact support with your Payment Hash:\n"
-                    . "`{$invoice->payment_hash}`"
-                );
-                return response()->json(['error' => 'Failed to generate invite link'], 500);
-            }
-
+            Log::critical('Failed to create invite link for user', [
+                'user_id' => $telegramUserId,
+                'invoice_id' => $invoice->id
+            ]);
+            
+            // Notify user about the issue
+            $this->telegram->sendMessage(
+                $telegramUserId, 
+                "❌ Payment confirmed but failed to generate invite link.\n\n"
+                . "Please contact support with your Payment Hash:\n"
+                . "`{$invoice->payment_hash}`"
+            );
+            return response()->json(['error' => 'Failed to generate invite link'], 500);
         }
-        // Extract the invite link ID (Telegram API v7.0+ uses different field names)
+
+        // Save invite link info to purchase record
         $inviteLinkId = $inviteLinkData['id'] ?? 
                         $inviteLinkData['link_id'] ?? 
                         $inviteLinkData['invite_link_id'] ?? 
                         null;
-
-        // If no ID found, generate one from the link (for fallback)
-        if (!$inviteLinkId && isset($inviteLinkData['invite_link'])) {
-            $inviteLinkId = 'link_' . md5($inviteLinkData['invite_link']);
-            Log::info('Generated fallback invite link ID', ['generated_id' => $inviteLinkId]);
-        }
-
-        // Save invite link info to purchase record
+        
         $purchase->update([
             'telegram_invite_link' => $inviteLinkData['invite_link'],
-            'telegram_invite_link_id' => $inviteLinkId,
+            'telegram_invite_link_id' => $inviteLinkData['invite_link_id'] ?? $inviteLinkId,
             'invite_sent_at' => now(),
+        ]);
+
+        Log::info('Purchase updated with invite link', [
+            'purchase_id' => $purchase->id,
+            'invite_link' => $inviteLinkData['invite_link']
         ]);
 
         // Send invite link to user
@@ -147,9 +169,13 @@ class BlinkWebhookController extends Controller
         
         Log::info('Invite link sent to user', [
             'user_id' => $telegramUserId,
-            'invite_link_id' => $inviteLinkId
+            'invite_link' => $inviteLinkData['invite_link']
         ]);
 
-        return response()->json(['status' => 'success', 'invoice_id' => $invoice->id]);
+        return response()->json([
+            'status' => 'success',
+            'invoice_id' => $invoice->id,
+            'user_notified' => true
+        ]);
     }
 }
