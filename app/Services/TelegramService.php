@@ -38,6 +38,33 @@ class TelegramService
     }
 
     /**
+ * Send a photo message to a Telegram user
+ */
+    public function sendPhoto(string $chatId, string $photoUrl, string $caption = null): array
+    {
+        $payload = [
+            'chat_id' => $chatId,
+            'photo' => $photoUrl,
+            'parse_mode' => 'HTML',
+        ];
+        
+        if ($caption) {
+            $payload['caption'] = $caption;
+            $payload['parse_mode'] = 'Markdown';
+        }
+        
+        $response = Http::post($this->baseUrl . 'sendPhoto', $payload);
+        
+        if (!$response->successful()) {
+            Log::error('Failed to send photo', [
+                'chat_id' => $chatId,
+                'response' => $response->json()
+            ]);
+        }
+        
+        return $response->json();
+    }
+    /**
      * Create a single-use invite link for your private channel.
      * https://core.telegram.org/bots/api#createchatinvitelink
      */
