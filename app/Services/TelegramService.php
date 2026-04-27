@@ -55,6 +55,24 @@ class TelegramService
         
         return $response->json();
     }
+    public function sendMediaGroup(string $chatId, array $imageUrls, string $caption = '')
+    {
+        $media = [];
+        foreach ($imageUrls as $index => $url) {
+            $media[] = [
+                'type' => 'photo',
+                'media' => $url,
+                // Only add the caption to the first image in the group
+                'caption' => ($index === 0) ? $caption : '',
+                'parse_mode' => 'Markdown'
+            ];
+        }
+
+        return Http::post($this->baseUrl . 'sendMediaGroup', [
+            'chat_id' => $chatId,
+            'media' => json_encode($media),
+        ]);
+    }
     /**
      * Create a single-use invite link for your private channel.
      * https://core.telegram.org/bots/api#createchatinvitelink
@@ -188,6 +206,32 @@ class TelegramService
         return null;
     }
 
+    /**
+ * Get the total number of members in a chat.
+ */
+    public function getChatMemberCount(string $chatId): int
+    {
+        try {
+            $response = Http::get($this->baseUrl . 'getChatMemberCount', [
+                'chat_id' => $chatId
+            ]);
+
+            $result = $response->json();
+
+            if (isset($result['ok']) && $result['ok'] === true) {
+                return (int) $result['result'];
+            }
+
+            Log::error("Telegram API Error in getChatMemberCount", $result);
+            return 0;
+        } catch (\Exception $e) {
+            Log::error('Failed to get chat member count', [
+                'chat_id' => $chatId,
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
+    }
     /**
      * Kick a member from the chat
      */
