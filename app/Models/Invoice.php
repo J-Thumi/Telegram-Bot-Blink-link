@@ -21,6 +21,13 @@ class Invoice extends Model
         'payment_request',
         'amount_msat',
         'status',
+        'full_name',
+        'username',
+        'telegram_client_ip',
+        'blink_client_ip',
+        'satoshis_paid',
+        'paid_at',
+        
     ];
 
     /**
