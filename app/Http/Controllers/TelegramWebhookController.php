@@ -29,18 +29,43 @@ class TelegramWebhookController extends Controller
         $update = $request->all();
         Log::info('Telegram webhook received', $update);
 
+        $clientIp = $request->ip();
+
+        Log::info('Client IP address', ['ip' => $clientIp]);
+
         // Check if it's a message and has text
         if (isset($update['message']['text'])) {
             $chatId = $update['message']['chat']['id'];
             $text = trim($update['message']['text']);
             $telegramUserId = $update['message']['from']['id'];
 
-            Log::info("Received message from user {$telegramUserId}: {$text}");
+            // Extracting Names
+            $firstName = $update['message']['from']['first_name'] ?? '';
+            $lastName = $update['message']['from']['last_name'] ?? '';
+            
+            // Combine names for a full name variable
+            $fullName = trim($firstName . ' ' . $lastName) ?? 'No name';
+
+            // Extracting Username
+            // Note: Usernames don't include the '@' symbol in the webhook
+            $username = $update['message']['from']['username'] ?? 'No username';
+
+            Log::info("Received message from user {$username}: {$text}");
+
+            $isOwner = $this->isBotOwner($telegramUserId);
 
             // Handle the /start or /buy command
             if ($text === '/start' || $text === '/buy') {
-                $this->handlePurchaseCommand($chatId, $telegramUserId);
-            } else {
+                $this->handlePurchaseCommand($chatId, $telegramUserId, $fullName, $username, $clientIp);
+            }elseif ($text === '/resetGroup' && $isOwner) {
+                Log::info("User {$username} initiated group reset.");
+                $this->handleResetGroup($chatId, $telegramUserId);
+            } elseif($text=='/cancelInvoices'){
+                Log::info("User {$username} requested to cancel pending invoices.");
+                $this->canclelPendingInvoices($chatId, $telegramUserId);
+            }
+            else {
+                Log::info("Received unknown command from user {$username}: {$text}");
                 $this->telegram->sendMessage($chatId, "🤖 Use /buy to get access.");
             }
         }else {
@@ -49,11 +74,135 @@ class TelegramWebhookController extends Controller
 
         return response()->json(['status' => 'ok']);
     }
+    protected function canclelPendingInvoices(string $chatId, string $telegramUserId){
+        $pendingPurchases = Purchase::where('telegram_id', $telegramUserId)
+                                    ->whereHas('invoice', function($q) {
+                                        $q->where('status', 'pending');
+                                    })->get();
+
+        if ($pendingPurchases->isEmpty()) {
+            $this->telegram->sendMessage($chatId, "✅ You have no pending invoices to cancel.");
+            return;
+        }
+
+        foreach ($pendingPurchases as $purchase) {
+            $invoice = $purchase->invoice;
+            if ($invoice && $invoice->status === 'pending') {
+                $invoice->status = 'cancelled';
+                $invoice->save();
+                Log::info("Cancelled invoice {$invoice->id} for user {$telegramUserId}");
+            }
+        }
+
+        $this->telegram->sendMessage($chatId, "✅ All your pending invoices have been cancelled.");
+    }
+    protected function isBotOwner(string $telegramUserId): bool
+    {
+        $ownerId = config('services.telegram.owner_id');
+        return $telegramUserId === $ownerId;
+    }
+
+    /**
+     * Handle the /reset-group command - removes all non-admin members
+     */
+    protected function handleResetGroup(string $chatId, string $telegramUserId)
+    {
+        Log::info("Reset group command initiated by {$telegramUserId}");
+        
+        // Send initial status message
+        $this->telegram->sendMessage($chatId, "🔄 Starting group reset... This may take a few moments.");
+        
+        try {
+            // Get all chat members
+            $groupChatId = config('services.telegram.channel_id'); // Ensure we are targeting the correct chat
+            $members = $this->telegram->getChatMembers($groupChatId);
+            
+            if (!$members || empty($members)) {
+                $this->telegram->sendMessage($chatId, "❌ Unable to fetch group members. Make sure bot is admin. Falling back to database members.");
+
+                Log::error("Failed to fetch members for Group chat ID {$groupChatId}.");
+            }
+
+            $totalMembers = count($members);
+            $removedCount = 0;
+            $adminCount = 0;
+            $failedCount = 0;
+            
+            // Send progress update
+            $this->telegram->sendMessage($chatId, "📊 Found {$totalMembers} members. Removing non-admin users...");
+            
+            foreach ($members as $member) {
+                $userId = $member['user']['id'];
+                $userName = $member['user']['username'] ?? $member['user']['first_name'] ?? 'Unknown';
+                $status = $member['status'] ?? '';
+                
+                // Skip if user is an administrator or creator
+                if ($status === 'administrator' || $status === 'creator') {
+                    $adminCount++;
+                    Log::info("Skipping admin/creator", [
+                        'user_id' => $userId,
+                        'name' => $userName,
+                        'status' => $status
+                    ]);
+                    continue;
+                }
+                
+                // Skip the bot itself
+                if ($userId === config('services.telegram.bot_user_id')) {
+                    continue;
+                }
+                
+                // Remove the user
+                $removed = $this->telegram->kickChatMember($groupChatId, $userId);
+                
+                if ($removed) {
+                    $removedCount++;
+                    Log::info("Removed user", [
+                        'user_id' => $userId,
+                        'name' => $userName
+                    ]);
+                } else {
+                    $failedCount++;
+                    Log::warning("Failed to remove user", [
+                        'user_id' => $userId,
+                        'name' => $userName
+                    ]);
+                }
+                
+                // Small delay to avoid hitting rate limits
+                usleep(50000); // 50ms delay
+            }
+            
+            // Send summary
+            $summary = "✅ *Group Reset Complete!*\n\n"
+                     . "📊 *Statistics:*\n"
+                     . "├ Total members: {$totalMembers}\n"
+                     . "├ 👑 Admins kept: {$adminCount}\n"
+                     . "├ 🗑️ Removed users: {$removedCount}\n"
+                     . "└ ❌ Failed removals: {$failedCount}\n\n"
+                     . "🔒 The group has been reset. Only admins remain.";
+            
+            $this->telegram->sendMessage($chatId, $summary);
+            Log::info("Group reset completed", [
+                'total' => $totalMembers,
+                'removed' => $removedCount,
+                'admins_kept' => $adminCount,
+                'failed' => $failedCount
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error("Error during group reset", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            $this->telegram->sendMessage($chatId, "❌ Error during group reset: " . $e->getMessage());
+        }
+    }
 
     /**
      * Core logic for the purchase flow.
      */
-   protected function handlePurchaseCommand(string $chatId, string $telegramUserId)
+   protected function handlePurchaseCommand(string $chatId, string $telegramUserId, string $fullName, string $username, string $clientIp)
     {
         // 1. Check if user already has an active, unpaid invoice
         $existingPurchase = Purchase::where('telegram_id', $telegramUserId)
@@ -61,16 +210,32 @@ class TelegramWebhookController extends Controller
                                         $q->where('status', 'pending');
                                     })->first();
 
-        if ($existingPurchase) {
-            $this->telegram->sendMessage($chatId, "⏳ You already have a pending payment. Please complete or wait for it to expire.");
-            return;
-        }
+        
 
+        if ($existingPurchase ) {
+            $expireInSeconds = (int) config('services.blink.invoice_expiry', 600); // Default to 10 minutes
+            $expireDate = $existingPurchase->created_at->addSeconds($expireInSeconds);
+
+            if(now()->greaterThan($expireDate)){
+                // Mark invoice as expired
+                $existingPurchase->invoice->status = 'expired';
+                $existingPurchase->invoice->save();
+                Log::info("Expired old invoice for user {$telegramUserId} with invoice ID {$existingPurchase->invoice->id}");
+            }else
+            
+            {
+                $this->telegram->sendMessage($chatId, "⏳ You already have a pending payment. Please complete, wait for it to expire. If you want to cancel pending payments, use /cancelInvoices.");
+            Log::info("User {$telegramUserId} attempted to create a new invoice but has an existing pending invoice ID {$existingPurchase->invoice->id}");
+            return;
+
+        }
+        }
         // 2. Create a new invoice with Blink
-        $amountInSatoshis = config('services.blink.invoice_amount'); // Example: 100 sats. Change as needed.
+        $amountInSatoshis = (int) config('services.blink.invoice_amount'); // Example: 100 sats. Change as needed.
         Log::info("Creating Blink invoice for user {$telegramUserId} with amount {$amountInSatoshis} sats");
 
-        $blinkInvoice = $this->blink->createInvoice($amountInSatoshis);
+        $invoiceExpiry = config('services.blink.invoice_expiry', 600); // Invoice expiry in seconds (default 10 minutes)
+        $blinkInvoice = $this->blink->createInvoice($amountInSatoshis, $invoiceExpiry);
 
         if (!$blinkInvoice) {
             $this->telegram->sendMessage($chatId, "❌ Payment system error. Please try again later.");
@@ -85,6 +250,9 @@ class TelegramWebhookController extends Controller
             'payment_request' => $blinkInvoice['payment_request'], // bolt11 string
             'amount_msat' => $blinkInvoice['amount_msat'],
             'status' => 'pending',
+            'full_name' => $fullName ?? 'No name',
+            'username' => $username ?? 'No username',
+            'telegram_client_ip' => $clientIp ?? 'No IP',
         ]);
 
         Log::info("Invoice stored: {$invoice}");
@@ -121,12 +289,7 @@ class TelegramWebhookController extends Controller
     $this->telegram->sendMessage($chatId, $mainMessageText, $keyboard);
     
     // 6. Send invoice as a SEPARATE message (only the invoice, no extra text)
-    $invoiceMessageText = sprintf(
-        "🔗 *Your Lightning Invoice:*\n\n"
-        . "`%s`\n\n"
-        . "📋 Tap and hold to copy the invoice above.",
-        $invoice->payment_request
-    );
+    $invoiceMessageText = sprintf("%s",$invoice->payment_request);
 
     $this->telegram->sendMessage($chatId, $invoiceMessageText);
 
