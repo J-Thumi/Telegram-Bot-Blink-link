@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     libjpeg62-turbo-dev \
     libpng-dev \
     netcat-openbsd \
+    libicu-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) gd \
     && docker-php-ext-install pdo_mysql \
@@ -27,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install exif \
     && docker-php-ext-install pcntl \
     && docker-php-ext-install sockets \
+    && docker-php-ext-install intl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -51,7 +53,9 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Install PHP dependencies
-RUN composer install --no-interaction --optimize-autoloader --no-dev --ignore-platform-req=ext-pcntl
+RUN composer install --no-interaction --optimize-autoloader --no-dev \
+    --ignore-platform-req=ext-pcntl \
+    --ignore-platform-req=ext-intl
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html \
@@ -66,5 +70,3 @@ EXPOSE 80
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-
-# done
