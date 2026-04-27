@@ -9,29 +9,25 @@ class TelegramService
 {
     protected string $baseUrl;
     protected string $token;
-    protected string $channelUsername;
+    protected string $channelID;
 
     public function __construct()
     {
         $this->token = config('services.telegram.bot_token');
         $this->baseUrl = "https://api.telegram.org/bot{$this->token}/";
-        $this->channelUsername = config('services.telegram.channel_username');
+        $this->channelID = config('services.telegram.channel_id');
     }
 
     /**
      * Send a plain text message to a Telegram user.
      */
-    public function sendMessage(string $chatId, string $text, array $replyMarkup = null): array
+    public function sendMessage(string $chatId, string $text): array
     {
         $payload = [
             'chat_id' => $chatId,
             'text' => $text,
             'parse_mode' => 'HTML',
         ];
-
-        if ($replyMarkup) {
-            $payload['reply_markup'] = json_encode($replyMarkup);
-        }
 
         $response = Http::post($this->baseUrl . 'sendMessage', $payload);
         return $response->json();
@@ -40,18 +36,13 @@ class TelegramService
     /**
  * Send a photo message to a Telegram user
  */
-    public function sendPhoto(string $chatId, string $photoUrl, string $caption = null): array
+    public function sendPhoto(string $chatId, string $photoUrl): array
     {
         $payload = [
             'chat_id' => $chatId,
             'photo' => $photoUrl,
             'parse_mode' => 'HTML',
         ];
-        
-        if ($caption) {
-            $payload['caption'] = $caption;
-            $payload['parse_mode'] = 'Markdown';
-        }
         
         $response = Http::post($this->baseUrl . 'sendPhoto', $payload);
         
@@ -73,7 +64,7 @@ class TelegramService
         $expireDate = now()->addSeconds($expireInSeconds)->timestamp;
 
         $response = Http::post($this->baseUrl . 'createChatInviteLink', [
-            'chat_id' => $this->channelUsername,
+            'chat_id' => $this->channelID,
             'member_limit' => 1,       // Single-use link
             'expire_date' => $expireDate,
             'creates_join_request' => false,
@@ -96,7 +87,7 @@ class TelegramService
     public function revokeInviteLink(string $inviteLinkId): bool
     {
         $response = Http::post($this->baseUrl . 'revokeChatInviteLink', [
-            'chat_id' => $this->channelUsername,
+            'chat_id' => $this->channelID,
             'invite_link_id' => $inviteLinkId,
         ]);
 
@@ -116,5 +107,123 @@ class TelegramService
         ]);
 
         return $response->json();
+    }
+
+
+    /**
+     * Get all members of a chat/group
+     * Note: This requires the bot to be admin
+     */
+    public function getChatMembers(string $chatId): ?array
+    {
+        Log::info("Fetching chat members for chat ID: {$chatId}");
+        $members = [];
+        $nextOffset = null;
+        
+        try {
+            // Telegram API limits to 200 members per request, need to loop
+            do {
+                $params = [
+                    'chat_id' => $chatId,
+                    'limit' => 200
+                ];
+                
+                if ($nextOffset) {
+                    $params['offset'] = $nextOffset;
+                }
+                
+                $response = Http::get($this->baseUrl . 'getChatAdministrators', [
+                    'chat_id' => $chatId
+                ]);
+                
+                $result = $response->json();
+                
+                if (isset($result['ok']) && $result['ok'] === true) {
+                    // For supergroups, we also need regular members
+                    $admins = $result['result'];
+                    
+                    // Get regular members (this is more complex and may require getChatMembersCount)
+                    // For now, we'll work with admins + what we can get
+                    $members = array_merge($members, $admins);
+                }
+                
+                break; // For now, break after first iteration
+                
+            } while ($nextOffset);
+            
+            // Alternative: Use getChatMembersCount if you need all members
+            // Note: Telegram doesn't provide a direct API to get all members of a large group
+            
+            return $members;
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to get chat members', [
+                'chat_id' => $chatId,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Get chat administrators
+     */
+    public function getChatAdministrators(string $chatId): ?array
+    {
+        $response = Http::get($this->baseUrl . 'getChatAdministrators', [
+            'chat_id' => $chatId
+        ]);
+        
+        $result = $response->json();
+        
+        if (isset($result['ok']) && $result['ok'] === true) {
+            return $result['result'];
+        }
+        
+        Log::error('Failed to get chat administrators', [
+            'chat_id' => $chatId,
+            'response' => $result
+        ]);
+        
+        return null;
+    }
+
+    /**
+     * Kick a member from the chat
+     */
+    public function kickChatMember(string $chatId, int $userId): bool
+    {
+        $response = Http::post($this->baseUrl . 'banChatMember', [
+            'chat_id' => $chatId,
+            'user_id' => $userId
+        ]);
+        
+        $result = $response->json();
+        
+        if (isset($result['ok']) && $result['ok'] === true) {
+            // Optionally unban immediately to allow rejoining later
+            Http::post($this->baseUrl . 'unbanChatMember', [
+                'chat_id' => $chatId,
+                'user_id' => $userId,
+                'only_if_banned' => true
+            ]);
+            return true;
+        }
+        
+        Log::error('Failed to kick member', [
+            'chat_id' => $chatId,
+            'user_id' => $userId,
+            'response' => $result
+        ]);
+        
+        return false;
+    }
+
+    /**
+     * Get bot owner ID from config
+     */
+    public function getBotOwnerId(): ?string
+    {
+        return config('services.telegram.owner_id');
     }
 }
