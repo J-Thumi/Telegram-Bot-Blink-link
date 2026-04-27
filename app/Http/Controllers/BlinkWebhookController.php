@@ -26,8 +26,11 @@ class BlinkWebhookController extends Controller
         // Log the raw request for debugging
         Log::info('Blink webhook received', $request->all());
 
+        $clientIp = $request->ip();
+        Log::info('Client IP address', ['ip' => $clientIp]);
+
         $payload = $request->all();
-        
+
         // Check for receive.lightning event (payment received)
         $eventType = $payload['eventType'] ?? null;
         
@@ -100,6 +103,11 @@ class BlinkWebhookController extends Controller
 
         // Mark invoice as paid
         $invoice->markAsPaid();
+        $invoice->update([
+            'paid_at' => now(),
+            'satoshis_paid' => $settlementAmount * 1000, // Update with actual received amount
+            'blink_client_ip' => $clientIp,
+        ]);
         Log::info('Invoice marked as paid', ['invoice_id' => $invoice->id]);
 
         // Find the associated purchase
