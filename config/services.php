@@ -5,11 +5,15 @@ return [
         'api_key' => env('BLINK_API_KEY'),
         'invoice_amount' => env('BLINK_INVOICE_AMOUNT', 100), // Amount in satoshis
         'graphql_url' => env('BLINK_GRAPHQL_URL', 'https://api.blink.sv/graphql'),
+        'invoice_expiry' => env('BLINK_INVOICE_EXPIRY', 600), // Invoice expiry in seconds (default 10 minutes)
     ],
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
         'channel_username' => env('TELEGRAM_CHANNEL_USERNAME'),
         'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
+        'owner_id' => env('TELEGRAM_OWNER_ID'),
+        'channel_id' => env('TELEGRAM_CHANNEL_ID'),
+        'bot_user_id' => env('TELEGRAM_BOT_USER_ID'),
     ],
 
     /*
