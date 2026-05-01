@@ -13,6 +13,8 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\HtmlString;
 
 class SubjectResource extends Resource
 {
@@ -138,36 +140,21 @@ class SubjectResource extends Resource
                     $imageCount = $record->images()->count();
                     $imagePaths = $record->images()->pluck('title')->take(3)->toArray();
                     $moreImages = $imageCount > 3 ? " and {$imageCount} more" : "";
-                    
-                    return "⚠️ **You are about to send {$imageCount} image(s) to Telegram:**\n\n" .
-                        "**Subject:** {$record->name}\n" .
-                        "**Images to send:** " . implode(', ', $imagePaths) . "{$moreImages}\n\n" .
-                        "**📌 Important Precautions:**\n" .
-                        "• ✅ This will send ALL images to the Telegram channel\n" .
-                        "• ⚠️ No member count verification will be performed\n" .
-                        "• 📸 Images will be sent in their current sort order\n" .
-                        "• 🔄 This action cannot be undone\n" .
-                        "• 📝 This action will be logged\n\n" .
-                        "⚠️ **Are you absolutely sure you want to proceed?**";
+                            return  new HtmlString("Subject: {$record->name} <br>"
+                                . "Required Members: {$record->members_count}<br>"
+                                . "Please confirm that you want to proceed with sending the images to Telegram.");
+
+                       
                 })
-                ->modalSubmitActionLabel('✅ Yes, Send Images Now')
-                ->modalCancelActionLabel('❌ No, Cancel')
+                ->modalSubmitActionLabel(' Yes, Send Images Now')
+                ->modalCancelActionLabel(' No, Cancel')
                 ->modalWidth('lg')
                 ->action(function (Subject $record) {
-                    return self::sendToTelegram($record);
+                    return self::executeSendToTelegram($record);
                 })
                 ->visible(fn (Subject $record): bool => 
                     $record->images()->exists()
                 ),
-                    
-                // Button to check status only
-                Tables\Actions\Action::make('checkStatus')
-                    ->label('Check Status')
-                    ->icon('heroicon-o-arrow-path')
-                    ->color('gray')
-                    ->action(function (Subject $record) {
-                        return self::checkSubjectStatus($record);
-                    }),
                     
             ])
             ->bulkActions([
@@ -201,53 +188,16 @@ class SubjectResource extends Resource
             ]);
     }
 
-   /**
-     * Send subject to Telegram with detailed confirmation
-     */
-    public static function sendToTelegram(Subject $subject, $showNotification = true)
-    {
-        // Get subject details for the confirmation
-        $imageCount = $subject->images()->count();
-        $imagePreview = $subject->images()->first();
-        
-        // Create a detailed confirmation notification
-        Notification::make()
-            ->title('⚠️ Confirm Send to Telegram')
-            ->body(
-                "You are about to send the following subject to Telegram:\n\n" .
-                "📚 **Subject:** {$subject->name}\n" .
-                "📸 **Images:** {$imageCount} image(s)\n" .
-                "📅 **Due Date:** " . ($subject->due_date ? \Illuminate\Support\Carbon::parse($subject->due_date)->format('F j, Y') : 'Not set') . "\n\n" .
-                "⚠️ **Important Notes:**\n" .
-                "• This will send ALL images to the Telegram channel\n" .
-                "• No member count check will be performed\n" .
-                "• Images will be sent in order of their sort order\n" .
-                "• This action cannot be undone\n\n" .
-                "Do you want to proceed?"
-            )
-            ->warning()
-            ->persistent()
-            ->actions([
-                \Filament\Notifications\Actions\Action::make('confirm')
-                    ->label('✅ Yes, Send Now')
-                    ->color('success')
-                    ->button()
-                    ->action(function () use ($subject, $showNotification) {
-                        return self::executeSendToTelegram($subject, $showNotification);
-                    }),
-                \Filament\Notifications\Actions\Action::make('cancel')
-                    ->label('❌ Cancel')
-                    ->color('danger')
-                    ->button(),
-            ])
-            ->send();
-    }
-
     /**
      * Execute the actual sending
      */
     public static function executeSendToTelegram(Subject $subject, $showNotification = true)
     {
+        Log::info("Initiating send to Telegram for subject '{$subject->name}' (ID: {$subject->id})", [
+            'subject_id' => $subject->id,
+            'subject_name' => $subject->name,
+            'images_count' => $subject->images()->count(),
+        ]);
         try {
             // Run the artisan command for this specific subject
             $exitCode = \Illuminate\Support\Facades\Artisan::call('subjects:send-specific', [
