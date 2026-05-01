@@ -37,4 +37,14 @@ class Subject extends Model
             }
         });
     }
+    // App\Models\Subject.php
+
+    public static function getNextDue()
+    {
+        return self::where('status', '!=', 'Sent')
+            ->where('due_date', '>=', now())
+            ->where('due_date', '<=', now()->addHours(24))
+            ->orderBy('due_date', 'asc')
+            ->first();
+    }
 }

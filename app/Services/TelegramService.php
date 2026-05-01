@@ -33,28 +33,81 @@ class TelegramService
         return $response->json();
     }
 
-    /**
- * Send a photo message to a Telegram user
- */
-    public function sendPhoto(string $chatId, string $photoUrl): array
-    {
-        $payload = [
-            'chat_id' => $chatId,
-            'photo' => $photoUrl,
-            'parse_mode' => 'HTML',
-        ];
-        
-        $response = Http::post($this->baseUrl . 'sendPhoto', $payload);
-        
-        if (!$response->successful()) {
-            Log::error('Failed to send photo', [
-                'chat_id' => $chatId,
-                'response' => $response->json()
-            ]);
-        }
-        
-        return $response->json();
+// App\Services\TelegramService
+
+public function sendPhoto(string $chatId, string $photo, ?string $caption = null): array
+{
+    $url = $this->baseUrl . 'sendPhoto';
+    $params = [
+        'chat_id' => $chatId,
+        'caption' => $caption,
+        'parse_mode' => 'HTML',
+    ];
+
+    // Check if $photo is a local path or a remote URL
+    if (file_exists($photo)) {
+        $response = Http::attach('photo', file_get_contents($photo), basename($photo))
+            ->post($url, $params);
+    } else {
+        $params['photo'] = $photo;
+        $response = Http::post($url, $params);
     }
+
+    if (!$response->successful()) {
+        Log::error('Telegram sendPhoto failed', [
+            'chat_id' => $chatId,
+            'response' => $response->json()
+        ]);
+    }
+
+    return $response->json();
+}
+
+/**
+ * Core helper to handle sending a subject's images to any chatId (User or Channel)
+ */
+public function fulfillSubjectImages(string $chatId, \App\Models\Subject $subject): bool
+{
+    $images = $subject->images()->orderBy('sort_order')->get();
+    if ($images->isEmpty()) return false;
+
+    $mainCaption = "<b>{$subject->name}</b>\n\n" . ($subject->description ?? '');
+    $success = false;
+
+    foreach ($images as $index => $image) {
+        // Only the first image gets the full caption
+        $caption = ($index === 0) ? $mainCaption : null;
+        
+        $path = $this->resolveImagePath($image->path);
+        
+        if ($path) {
+            $res = $this->sendPhoto($chatId, $path, $caption);
+            if ($res['ok'] ?? false) $success = true;
+        }
+    }
+
+    return $success;
+}
+
+/**
+ * Centralized path resolver to find images across various Laravel directories
+ */
+private function resolveImagePath(string $path): ?string
+{
+    $possiblePaths = [
+        storage_path("app/public/{$path}"),
+        storage_path("app/{$path}"),
+        public_path("storage/{$path}"),
+        public_path($path),
+        $path
+    ];
+
+    foreach ($possiblePaths as $testPath) {
+        if (file_exists($testPath)) return $testPath;
+    }
+
+    return null;
+}
     public function sendMediaGroup(string $chatId, array $imageUrls, string $caption = '')
     {
         $media = [];
@@ -77,7 +130,7 @@ class TelegramService
      * Create a single-use invite link for your private channel.
      * https://core.telegram.org/bots/api#createchatinvitelink
      */
-    public function createSingleUseInviteLink(int $userId, int $expireInSeconds = 3600): ?array
+    public function createSingleUseInviteLink(int $userId, int $expireInSeconds = 604800): ?array
     {
         $expireDate = now()->addSeconds($expireInSeconds)->timestamp;
 
@@ -270,4 +323,7 @@ class TelegramService
     {
         return config('services.telegram.owner_id');
     }
+
+
+
 }

@@ -6,6 +6,7 @@ return [
         'invoice_amount' => env('BLINK_INVOICE_AMOUNT', 100), // Amount in satoshis
         'graphql_url' => env('BLINK_GRAPHQL_URL', 'https://api.blink.sv/graphql'),
         'invoice_expiry' => env('BLINK_INVOICE_EXPIRY', 600), // Invoice expiry in seconds (default 10 minutes)
+        'instant_buy_amount' => env('BLINK_AMOUNT_INSTANT_BUY_AMOUNT', 100), // Amount in satoshis for instant buy
     ],
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),

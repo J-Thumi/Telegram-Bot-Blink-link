@@ -112,7 +112,8 @@ class BlinkWebhookController extends Controller
 
         // Find the associated purchase
         $purchase = Purchase::where('invoice_id', $invoice->id)->first();
-
+        // Generate single-use Telegram invite link
+        $telegramUserId = $purchase->telegram_id;
         if (!$purchase) {
             Log::error('No purchase record found for paid invoice', [
                 'invoice_id' => $invoice->id,
@@ -121,64 +122,35 @@ class BlinkWebhookController extends Controller
             return response()->json(['error' => 'Purchase not found'], 500);
         }
 
-        // Generate single-use Telegram invite link
-        $telegramUserId = $purchase->telegram_id;
-        
-        Log::info('Generating invite link for user', ['telegram_user_id' => $telegramUserId]);
+        if ($invoice->is_instant_buy) {
+            // INSTANT: Send images directly to the user
+            $this->telegram->sendMessage($telegramUserId, "✅ *Payment Confirmed!* Your papers are being sent below:");
+            // Dynamically find the subject due in the next 24h
+            $subject = \App\Models\Subject::getNextDue();
 
-        $inviteLinkData = $this->telegram->createSingleUseInviteLink(
-            userId: $telegramUserId,
-            expireInSeconds: 604800 // 7 days
-        );
+            if (!$subject) {
+                Log::critical("Payment received for Instant Buy, but NO subject is due in 24h!", [
+                    'user_id' => $telegramUserId,
+                    'invoice_id' => $invoice->id
+                ]);
+                
+                $this->telegram->sendMessage($telegramUserId, "✅ *Payment Received!* \n\n⚠️ No papers are scheduled for the next 24 hours. Please contact support or wait for the next update.");
+                return response()->json(['status' => 'no_subject_due']);
+            }
 
-        if (!$inviteLinkData) {
-            Log::critical('Failed to create invite link for user', [
-                'user_id' => $telegramUserId,
-                'invoice_id' => $invoice->id
-            ]);
-            
-            // Notify user about the issue
-            $this->telegram->sendMessage(
-                $telegramUserId, 
-                "❌ Payment confirmed but failed to generate invite link.\n\n"
-                . "Please contact support with your Payment Hash:\n"
-                . "`{$invoice->payment_hash}`"
-            );
-            return response()->json(['error' => 'Failed to generate invite link'], 500);
-        }
-
-        // Save invite link info to purchase record
-        $inviteLinkId = $inviteLinkData['id'] ?? 
-                        $inviteLinkData['link_id'] ?? 
-                        $inviteLinkData['invite_link_id'] ?? 
-                        null;
-        
-        $purchase->update([
-            'telegram_invite_link' => $inviteLinkData['invite_link'],
-            'telegram_invite_link_id' => $inviteLinkData['invite_link_id'] ?? $inviteLinkId,
-            'invite_sent_at' => now(),
-        ]);
-
-        Log::info('Purchase updated with invite link', [
-            'purchase_id' => $purchase->id,
-            'invite_link' => $inviteLinkData['invite_link']
-        ]);
-
-        // Send invite link to user
-        $amountSats = $invoice->amount_msat / 1000;
-        $message = "✅ *Payment Received!*\n\n"
-                 . "🎉 Thank you for your payment of {$amountSats} sats!\n\n"
-                 . "🔗 Here is your single-use invite link to our private channel:\n"
-                 . "{$inviteLinkData['invite_link']}\n\n"
-                 . "⚠️ *Important:* This link works only once and will expire in 7 days or after first use.\n\n"
-                 . "Click the link above to join and get access!";
-
-        $this->telegram->sendMessage($telegramUserId, $message);
-        
-        Log::info('Invite link sent to user', [
+            $this->telegram->fulfillSubjectImages($telegramUserId, $purchase->subject);
+        } else {
+            // GOAL-BASED: Send the one-time invite link
+            Log::info('Generating invite link for user', ['telegram_user_id' => $telegramUserId]);
+            $invite = $this->telegram->createSingleUseInviteLink($telegramUserId);
+            $purchase->update(['telegram_invite_link' => $invite['invite_link'], 'invite_sent_at' => now()]);
+            Log::info('Invite link sent to user', [
             'user_id' => $telegramUserId,
-            'invite_link' => $inviteLinkData['invite_link']
+            'invite_link' => $invite['invite_link']
         ]);
+
+            $this->telegram->sendMessage($telegramUserId, "✅ *Payment Confirmed!*\n\nJoin the group: " . $invite['invite_link']);
+        }
 
         return response()->json([
             'status' => 'success',

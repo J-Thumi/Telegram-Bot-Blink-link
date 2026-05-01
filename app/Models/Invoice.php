@@ -27,6 +27,7 @@ class Invoice extends Model
         'blink_client_ip',
         'satoshis_paid',
         'paid_at',
+        'is_instant_buy',
         
     ];
 
@@ -39,6 +40,7 @@ class Invoice extends Model
         'amount_msat' => 'integer',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
+        'is_instant_buy' => 'boolean',
     ];
 
     /**
