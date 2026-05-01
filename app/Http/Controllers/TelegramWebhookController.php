@@ -393,7 +393,7 @@ class TelegramWebhookController extends Controller
         $mainMessageText = sprintf(
             "⚡️ *Pay %s sats for %s access.*\n\n"
             . "💰 Amount: `%s sats`\n"
-            . "⏳ Expires in 10 minutes.\n\n"
+            . "⏳ Expires in 24 hours.\n\n"
             . "Copy the invoice below and paste into Bitika.",
             $amount,
             $isInstant ? "INSTANT" : "GOAL-BASED",

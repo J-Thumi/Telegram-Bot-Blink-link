@@ -21,7 +21,7 @@ class TelegramService
     /**
      * Send a plain text message to a Telegram user.
      */
-    public function sendMessage(string $chatId, string $text): array
+   public function sendMessage(string $chatId, string $text, $replyMarkup = null): array
     {
         $payload = [
             'chat_id' => $chatId,
@@ -29,7 +29,20 @@ class TelegramService
             'parse_mode' => 'HTML',
         ];
 
+        // If a keyboard is provided, add it to the payload
+        if ($replyMarkup) {
+            $payload['reply_markup'] = $replyMarkup;
+        }
+
         $response = Http::post($this->baseUrl . 'sendMessage', $payload);
+        
+        if (!$response->successful()) {
+            Log::error('Telegram sendMessage failed', [
+                'chat_id' => $chatId,
+                'response' => $response->json()
+            ]);
+        }
+
         return $response->json();
     }
 

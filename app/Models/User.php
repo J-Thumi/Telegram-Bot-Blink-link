@@ -9,13 +9,14 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-
+use Filament\Panel;
+use Filament\Models\Contracts\FilamentUser;
 // #[Fillable(['name', 'email', 'password'])]
 // #[Hidden(['password', 'remember_token'])]
 
-class User extends Authenticatable
+class User extends Authenticatable implements FilamentUser
 {
-    protected array $fillable = [
+    protected $fillable = [
         'name',
         'email',
         'password',
@@ -34,5 +35,11 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+    public function canAccessPanel(Panel $panel): bool
+    {
+        // Allow access for development. 
+        // You can later restrict this to specific emails.
+        return true; 
     }
 }

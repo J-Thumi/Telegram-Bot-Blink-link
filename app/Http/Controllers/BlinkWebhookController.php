@@ -138,7 +138,7 @@ class BlinkWebhookController extends Controller
                 return response()->json(['status' => 'no_subject_due']);
             }
 
-            $this->telegram->fulfillSubjectImages($telegramUserId, $purchase->subject);
+            $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
         } else {
             // GOAL-BASED: Send the one-time invite link
             Log::info('Generating invite link for user', ['telegram_user_id' => $telegramUserId]);
