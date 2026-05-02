@@ -21,6 +21,8 @@ class Purchase extends Model
         'telegram_invite_link',
         'telegram_invite_link_id',
         'invite_sent_at',
+        'subject',
+        'image_sent_at',
     ];
 
     /**
@@ -33,6 +35,14 @@ class Purchase extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
+
+    /**
+     * Get the subject associated with this purchase.
+     */
+    public function subjectModel(): BelongsTo
+    {
+        return $this->belongsTo(Subject::class, 'subject', 'name');
+    }
 
     /**
      * Get the invoice associated with this purchase.
@@ -92,6 +102,24 @@ class Purchase extends Model
     {
         return $query->whereHas('invoice', function ($q) {
             $q->where('status', Invoice::STATUS_PENDING);
+        });
+    }
+    public function scopePaid($query)
+    {
+        return $query->whereHas('invoice', function ($q) {
+            $q->where('status', Invoice::STATUS_PAID);
+        });
+    }
+    public function scopeExpired($query)
+    {
+        return $query->whereHas('invoice', function ($q) {
+            $q->where('status', Invoice::STATUS_EXPIRED);
+        });
+    }
+    public function scopeCancelled($query)
+    {
+        return $query->whereHas('invoice', function ($q) {
+            $q->where('status', Invoice::STATUS_CANCELLED);
         });
     }
 }
