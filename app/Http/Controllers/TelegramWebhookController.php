@@ -391,18 +391,17 @@ class TelegramWebhookController extends Controller
         ];
 
         $mainMessageText = sprintf(
-            "⚡️ *Pay %s sats for %s access.*\n\n"
-            . "💰 Amount: `%s sats`\n"
-            . "⏳ Expires in 24 hours.\n\n"
-            . "Copy the invoice below and paste into Bitika.",
-            $amount,
-            $isInstant ? "INSTANT" : "GOAL-BASED",
-            $amount
+            "Payment Instructions for the paper:*\n\n".
+            "1️⃣ Click the button below to open Bitika\n".
+            "2️⃣ Copy the invoice from the NEXT message(copy and paste only the code)\n".
+            "3️⃣ Paste it in Bitika and complete payment via M-Pesa\n".
+            "4️⃣ Wait a few seconds for confirmation\n\n".
+            "⏳ Invoice expires in the next 24hrs"
         );
 
         $this->telegram->sendMessage($chatId, $mainMessageText, $keyboard);
         
-        // Send the raw Bolt11 invoice for easy copying
+        // Send the raw blink invoice for easy copying
         $this->telegram->sendMessage($chatId, $invoice->payment_request);
     }
 
