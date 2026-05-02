@@ -41,10 +41,25 @@ class Subject extends Model
 
     public static function getNextDue()
     {
-        return self::where('status', '!=', 'Sent')
-            ->where('due_date', '>=', now())
+        return self::where('due_date', '>=', now())
             ->where('due_date', '<=', now()->addHours(24))
             ->orderBy('due_date', 'asc')
             ->first();
+    }
+
+    public function getCompletedPurchasesCountAttribute(): int
+    {
+        return $this->purchases()
+            ->whereHas('invoice', function ($q) {
+                $q->where('status', Invoice::STATUS_PAID);
+            })
+            ->whereNotNull('telegram_invite_link')
+            ->whereNotNull('invite_sent_at')
+            ->count();
+    }
+
+    public function purchases(): HasMany
+    {
+        return $this->hasMany(Purchase::class, 'subject', 'name');
     }
 }
