@@ -127,7 +127,11 @@ class BlinkWebhookController extends Controller
             $this->telegram->sendMessage($telegramUserId, "✅ *Payment Confirmed!* Your papers are being sent below:");
             // Dynamically find the subject due in the next 24h
             $subject = \App\Models\Subject::getNextDue();
-
+             // Update the purchase with the subject name
+            $purchase->update([
+                'subject' => $subject->name ?? null,
+            ]);
+            
             if (!$subject) {
                 Log::critical("Payment received for Instant Buy, but NO subject is due in 24h!", [
                     'user_id' => $telegramUserId,
@@ -137,9 +141,13 @@ class BlinkWebhookController extends Controller
                 $this->telegram->sendMessage($telegramUserId, "✅ *Payment Received!* \n\n⚠️ No papers are scheduled for the next 24 hours. Please contact support or wait for the next update.");
                 return response()->json(['status' => 'no_subject_due']);
             }
-
-            // $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
         } else {
+            $subject = \App\Models\Subject::getNextDue();
+             // Update the purchase with the subject name
+            $purchase->update([
+                'subject' => $subject->name ?? null,
+            ]);
+
             // GOAL-BASED: Send the one-time invite link
             Log::info('Generating invite link for user', ['telegram_user_id' => $telegramUserId]);
             $invite = $this->telegram->createSingleUseInviteLink($telegramUserId);
@@ -154,10 +162,6 @@ class BlinkWebhookController extends Controller
 
             $this->telegram->sendMessage($telegramUserId, "✅ *Payment Confirmed!*\n\nJoin the group: " . $invite['invite_link']);
         }
-        // Update the purchase with the subject name
-        $subject->update([
-            'subject' => $subject->name ?? null,
-        ]);
 
         return response()->json([
             'status' => 'success',
