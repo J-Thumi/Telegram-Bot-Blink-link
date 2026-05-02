@@ -69,6 +69,7 @@ class SubjectResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
+                    ->label('Subject Name')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('status')
                     ->label('Telegram Status')
@@ -81,9 +82,16 @@ class SubjectResource extends Resource
                         default => 'secondary',
                     }),
                 Tables\Columns\TextColumn::make('members_count')
-                    ->label('Required Members')
+                    ->label(new HtmlString('Required Members  <span x-tooltip.raw="This is the number of members that are required in the Telegram channel for this subject." class="ml-1 text-gray-400">?</span>'))
                     ->badge()
                     ->color('primary'),
+
+                Tables\Columns\TextColumn::make('completed_purchases_count')
+                    ->label(new HtmlString('Purchases Completed  <span x-tooltip.raw="This is the number of purchases that have been completed for this subject. Probably number of members in the channel for this subject." class="ml-1 text-gray-400">?</span>'))
+                    ->getStateUsing(fn (Subject $record): int => $record->completed_purchases_count)
+                    ->sortable()
+                    ->badge()
+                    ->color('success'),
                 Tables\Columns\TextColumn::make('images_count')
                     ->counts('images')
                     ->label('Total Images')
@@ -91,7 +99,8 @@ class SubjectResource extends Resource
                     ->color('success'),
                 Tables\Columns\TextColumn::make('due_date')
                     ->dateTime()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('images_sent_at')
                     ->label('Images Sent')
                     ->dateTime()
@@ -131,11 +140,11 @@ class SubjectResource extends Resource
                 // In SubjectResource.php, replace the sendToTelegram action with this:
 
             Tables\Actions\Action::make('sendToTelegram')
-                ->label('Send to Telegram')
+                ->label('Send to Telegram Channel')
                 ->icon('heroicon-o-paper-airplane')
                 ->color('success')
                 ->requiresConfirmation()
-                ->modalHeading('📤 Confirm Send to Telegram')
+                ->modalHeading('📤 Confirm Send to Telegram Channel')
                 ->modalDescription(function (Subject $record) {
                     $imageCount = $record->images()->count();
                     $imagePaths = $record->images()->pluck('title')->take(3)->toArray();
