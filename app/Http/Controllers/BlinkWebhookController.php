@@ -138,12 +138,15 @@ class BlinkWebhookController extends Controller
                 return response()->json(['status' => 'no_subject_due']);
             }
 
-            $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
+            // $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
         } else {
             // GOAL-BASED: Send the one-time invite link
             Log::info('Generating invite link for user', ['telegram_user_id' => $telegramUserId]);
             $invite = $this->telegram->createSingleUseInviteLink($telegramUserId);
-            $purchase->update(['telegram_invite_link' => $invite['invite_link'], 'invite_sent_at' => now()]);
+            $purchase->update([
+                'telegram_invite_link' => $invite['invite_link'],
+                'invite_sent_at' => now()
+            ]);
             Log::info('Invite link sent to user', [
             'user_id' => $telegramUserId,
             'invite_link' => $invite['invite_link']
@@ -151,6 +154,10 @@ class BlinkWebhookController extends Controller
 
             $this->telegram->sendMessage($telegramUserId, "✅ *Payment Confirmed!*\n\nJoin the group: " . $invite['invite_link']);
         }
+        // Update the purchase with the subject name
+        $subject->update([
+            'subject' => $subject->name ?? null,
+        ]);
 
         return response()->json([
             'status' => 'success',
