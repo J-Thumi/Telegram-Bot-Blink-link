@@ -249,6 +249,7 @@ class PurchaseResource extends Resource
                             // Update the purchase with delivery info
                             $record->update([
                                 'image_sent_at' => now(),
+                                'subject' => $subject->name,
                             ]);
                             
                             Notification::make()
