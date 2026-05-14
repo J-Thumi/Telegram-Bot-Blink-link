@@ -124,7 +124,7 @@ class BlinkWebhookController extends Controller
 
         if ($invoice->is_instant_buy) {
             // INSTANT: Send images directly to the user
-            $this->telegram->sendMessage($telegramUserId, "✅ *Payment Confirmed!* Your papers are being sent below:");
+            $this->telegram->sendMessage($telegramUserId, "Payment Received! You will receive the papers once Processing is completed. This may take a few moments...");
             // Dynamically find the subject due in the next 24h
             $subject = \App\Models\Subject::getNextDue();
              // Update the purchase with the subject name
@@ -138,7 +138,7 @@ class BlinkWebhookController extends Controller
                     'invoice_id' => $invoice->id
                 ]);
                 
-                $this->telegram->sendMessage($telegramUserId, "✅ *Payment Received!* \n\n⚠️ No papers are scheduled for the next 24 hours. Please contact support or wait for the next update.");
+                $this->telegram->sendMessage($telegramUserId, "Payment Received! \n\n⚠️ No papers are scheduled for the next 24 hours. Please contact support or wait for the next update.");
                 return response()->json(['status' => 'no_subject_due']);
             }
         } else {
