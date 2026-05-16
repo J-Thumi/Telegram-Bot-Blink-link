@@ -82,7 +82,7 @@ class SetTelegramWebhook extends Command
 
     protected function setWebhook($baseUrl)
     {
-        $webhookUrl = config('app.url') . '/api/telegram/webhook';
+        $webhookUrl = 'https://exams.caprover.jostech.co.ke' . '/api/telegram/webhook';
         $secretToken = config('services.telegram.webhook_secret');
 
         $response = Http::post($baseUrl . 'setWebhook', [

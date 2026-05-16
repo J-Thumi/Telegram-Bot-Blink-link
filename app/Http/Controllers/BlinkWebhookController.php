@@ -138,7 +138,7 @@ class BlinkWebhookController extends Controller
                     'invoice_id' => $invoice->id
                 ]);
                 
-                $this->telegram->sendMessage($telegramUserId, "Payment Received! \n\n⚠️ No papers are scheduled for the next 24 hours. Please contact support or wait for the next update.");
+                // $this->telegram->sendMessage($telegramUserId, "Payment Received! \n\n⚠️ No papers are scheduled for the next 24 hours. Please contact support or wait for the next update.");
                 return response()->json(['status' => 'no_subject_due']);
             }
         } else {

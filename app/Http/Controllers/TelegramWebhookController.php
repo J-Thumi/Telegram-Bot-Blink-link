@@ -246,7 +246,7 @@ class TelegramWebhookController extends Controller
         if($text === '/start'){
             $welcomeText = "Welcome to the UON Law Revision materials Bot!\n\n"
                          . "Fisheries pastpapers are free but we charge a fee for compiled questions that have  high chance of being tested in exams.\n\n"
-                         . "Write: Ukipunguza maringo and press /buy you'll get instructions for a 'prophetic version' of the 'past paper' that is kama unataka kusaidika, haubembelezwi.\n";
+                         . "Ukipunguza maringo and press /buy you'll get instructions for a 'prophetic version' of the 'past paper' that is kama unataka kusaidika, haubembelezwi.\n";
             
 
             $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
