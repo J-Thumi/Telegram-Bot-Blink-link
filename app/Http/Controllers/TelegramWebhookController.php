@@ -246,9 +246,9 @@ class TelegramWebhookController extends Controller
         if($text === '/start'){
             $welcomeText = "Welcome to the UON Law Revision materials Bot!\n\n"
                          . "Fisheries pastpapers are free but we charge a fee for compiled questions that have  high chance of being tested in exams.\n\n"
-                         . "Some call it 'Mwakenya' because of the level of accuracy.\n"
-                         . "Use the command /buy to get access to the 'Mwakenya'.\n\n";
-                         
+                         . "Write: Ukipunguza maringo and press /buy you'll get instructions for a 'prophetic version' of the 'past paper' that is kama unataka kusaidika, haubembelezwi.\n";
+            
+
             $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
             $this->telegram->sendMessage($chatId, $welcomeText);
             
@@ -258,15 +258,18 @@ class TelegramWebhookController extends Controller
             $keyboard = [
                 'inline_keyboard' => [
                     [
-                        ['text' => '🚀 Instant Access (Higher Fee)', 'callback_data' => 'buy_type_instant'],
-                        ['text' => '👥 Wait for Goal (Lower Fee)', 'callback_data' => 'buy_type_goal']
+                        ['text' => 'Generate invoice for Instant Access', 'callback_data' => 'buy_type_instant'],
+
                     ]
                 ]
             ];
 
-            $text = "📚 Select your access type:\n\n"
-                . "🚀 Instant: Get the compiled questions immediately after payment is processed.\n"
-                . "👥 Wait for Goal: Join the group; compiled questions are released once member targets are met.";
+            $text = "1.The amount for fisheries is 7,500 (Click the button below to generate invoice).\n"
+                . "2.Liaise with your friends, raise the money and follow instructions to process.\n"
+                . "3.Paper will be sent to your inbox after payment.\n"
+                . "4.Only share the paper with those who have contributed.\n"
+                . "5.Gatekeep the paper to avoid jeopardising this exercise.\n"
+                . "6.Mtu kama hajachang'a wacha asome, hatufanyi charity work hapa.";
 
             $this->telegram->sendMessage($chatId, $text, $keyboard);
 
@@ -319,6 +322,7 @@ class TelegramWebhookController extends Controller
             "2️⃣ Copy the invoice from the NEXT message(copy and paste only the code)\n".
             "3️⃣ Paste it in Bitika and complete payment via M-Pesa\n".
             "4️⃣ Wait a few seconds for confirmation\n\n".
+            "You will Receive the paper once the payment is processed\n\n".
             "⏳ Invoice expires in the next 24hrs"
         );
 
