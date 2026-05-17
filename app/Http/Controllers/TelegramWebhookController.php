@@ -242,18 +242,18 @@ class TelegramWebhookController extends Controller
         }
 
         $subject=Subject::where('name','fisheries_pastpaper')->first();
-        // 2. Instead of creating invoice, ask for the TYPE of purchase
-        if($text === '/start'){
-            $welcomeText = "Welcome to the UON Law Revision materials Bot!\n\n"
-                         . "Fisheries pastpapers are free but we charge a fee for compiled questions that have  high chance of being tested in exams.\n\n"
-                         . "Ukipunguza maringo and press /buy you'll get instructions for a 'prophetic version' of the 'past paper' that is kama unataka kusaidika, haubembelezwi.\n";
+        // // 2. Instead of creating invoice, ask for the TYPE of purchase
+        // if($text === '/start'){
+        //     $welcomeText = "Welcome to the UON Law Revision materials Bot!\n\n"
+        //                  . "Fisheries pastpapers are free but we charge a fee for compiled questions that have  high chance of being tested in exams.\n\n"
+        //                  . "Ukipunguza maringo and press /buy you'll get instructions for a 'prophetic version' of the 'past paper' that is kama unataka kusaidika, haubembelezwi.\n";
             
 
-            $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
-            $this->telegram->sendMessage($chatId, $welcomeText);
+        //     $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
+        //     $this->telegram->sendMessage($chatId, $welcomeText);
             
-        }
-        if($text === '/buy'){
+        // }
+        // if($text === '/buy'){
 
             $keyboard = [
                 'inline_keyboard' => [
@@ -273,7 +273,7 @@ class TelegramWebhookController extends Controller
 
             $this->telegram->sendMessage($chatId, $text, $keyboard);
 
-        }
+        // }
     }
 
     protected function processInvoiceGeneration(string $chatId, string $telegramUserId, bool $isInstant, $fullName, $username, $clientIp)
