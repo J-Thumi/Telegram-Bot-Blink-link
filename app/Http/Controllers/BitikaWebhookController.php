@@ -54,7 +54,7 @@ class BitikaWebhookController extends Controller
 
         // Replace these success values with the exact documented
         // successful terminal status from Bitika.
-        if (!in_array($status, ['success', 'successful', 'completed'], true)) {
+        if (!in_array($status, ['success', 'successful', 'completed', 'fulfilled'], true)) {
             Log::info('Bitika payment is not confirmed as successful.', [
                 'transaction_code' => $transactionCode,
                 'status' => $status,
