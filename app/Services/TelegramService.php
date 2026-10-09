@@ -339,6 +339,39 @@ private function resolveImagePath(string $path): ?string
         return config('services.telegram.owner_id');
     }
 
+    /**
+     * Delete multiple messages simultaneously in a chat (Bot API 7.0+).
+     *
+     * @param string $chatId
+     * @param array<int> $messageIds Array of up to 100 message IDs
+     * @return bool
+     */
+    public function deleteMessages(string $chatId, array $messageIds): bool
+    {
+        if (empty($messageIds)) {
+            return true;
+        }
+
+        $response = Http::post($this->baseUrl . 'deleteMessages', [
+            'chat_id' => $chatId,
+            'message_ids' => array_values($messageIds),
+        ]);
+
+        $result = $response->json();
+
+        if (isset($result['ok']) && $result['ok'] === true) {
+            return true;
+        }
+
+        Log::error('Telegram deleteMessages failed', [
+            'chat_id' => $chatId,
+            'message_ids' => $messageIds,
+            'response' => $result,
+        ]);
+
+        return false;
+    }
+
 
 
 }

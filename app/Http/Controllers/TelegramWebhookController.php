@@ -278,7 +278,7 @@ class TelegramWebhookController extends Controller
                     $chatId,
                     'Your M-Pesa payment request is being processed. '
                     . 'Please check your phone and wait for confirmation '
-                    . 'before starting another purchase.'
+                    . 'before starting another purchase. If You want to initiate another purchase, please send /cancelInvoices to cancel the current request.'
                 );
 
                 return;
@@ -897,6 +897,8 @@ class TelegramWebhookController extends Controller
                 // Small delay to reduce the risk of hitting API limits.
                 usleep(50000);
             }
+            // --- DELETING MESSAGES ---
+            $deletedMessagesCount = $this->purgeGroupMessages($groupChatId);
 
             $summary = "✅ *Group Reset Complete!*\n\n"
                 . "📊 *Statistics:*\n"
@@ -904,6 +906,7 @@ class TelegramWebhookController extends Controller
                 . "├ 👑 Admins kept: {$adminCount}\n"
                 . "├ 🗑️ Removed users: {$removedCount}\n"
                 . "└ ❌ Failed removals: {$failedCount}\n\n"
+                . "🗑️ Deleted messages: {$deletedMessagesCount}\n"
                 . '🔒 Group reset finished.';
 
             $this->telegram->sendMessage(
@@ -930,5 +933,49 @@ class TelegramWebhookController extends Controller
                 . 'Check the application logs for details.'
             );
         }
+    }
+
+    /**
+     * Purge group messages using Telegram's deleteMessages API in chunks of 100.
+     * Note: Telegram Bot API can only delete messages sent within the last 48 hours.
+     */
+    protected function purgeGroupMessages(string $groupChatId, int $latestMessageId = 0): int
+    {
+        // 1. Option A: Retrieve tracked message IDs from database
+        // $messageIds = GroupMessage::where('chat_id', $groupChatId)
+        //     ->where('created_at', '>=', now()->subHours(48))
+        //     ->pluck('message_id')
+        //     ->toArray();
+
+        // 2. Option B: Reverse loop from latest message ID if tracked or passed
+        if ($latestMessageId <= 0) {
+            return 0; // Skip if no message tracking is active
+        }
+
+        $deletedCount = 0;
+        // Attempt to purge a batch window (e.g., last 500 messages)
+        $startId = max(1, $latestMessageId - 500);
+        $allIds = range($latestMessageId, $startId);
+
+        // Telegram deleteMessages accepts up to 100 message_ids per call
+        foreach (array_chunk($allIds, 100) as $chunk) {
+            try {
+                // Endpoint: POST https://api.telegram.org/bot<token>/deleteMessages
+                // Payload: ['chat_id' => $groupChatId, 'message_ids' => $chunk]
+                $success = $this->telegram->deleteMessages($groupChatId, $chunk);
+
+                if ($success) {
+                    $deletedCount += count($chunk);
+                }
+            } catch (Throwable $e) {
+                Log::warning('Failed chunk deletion during group reset.', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            usleep(300000); // 300ms pause between bulk deletes to respect rate limits
+        }
+
+        return $deletedCount;
     }
 }
