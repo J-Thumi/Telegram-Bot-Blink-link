@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\Invoice;
 use App\Models\Purchase;
-use App\Models\Subject;
 use App\Services\BitikaPaymentService;
 use App\Services\TelegramService;
 use Illuminate\Http\Request;
@@ -35,7 +34,7 @@ class TelegramWebhookController extends Controller
         $clientIp = $request->ip();
 
         /*
-         * 1. Handle inline keyboard callbacks.
+         * Handle inline keyboard callbacks.
          */
         if (isset($update['callback_query'])) {
             $callback = $update['callback_query'];
@@ -53,11 +52,8 @@ class TelegramWebhookController extends Controller
             $firstName = $callback['from']['first_name'] ?? '';
             $lastName = $callback['from']['last_name'] ?? '';
 
-            $fullName = trim($firstName . ' ' . $lastName)
-                ?: 'No name';
-
-            $username = $callback['from']['username']
-                ?? 'No username';
+            $fullName = trim($firstName . ' ' . $lastName) ?: 'No name';
+            $username = $callback['from']['username'] ?? 'No username';
 
             Log::info('Telegram callback received', [
                 'telegram_user_id' => $telegramUserId,
@@ -85,15 +81,11 @@ class TelegramWebhookController extends Controller
                 );
             }
 
-            // Answer the callback if TelegramService supports this method.
-            // Uncomment if your TelegramService implements it:
-            // $this->telegram->answerCallbackQuery($callback['id']);
-
             return response()->json(['status' => 'ok']);
         }
 
         /*
-         * 2. Handle standard text messages.
+         * Handle standard text messages.
          */
         if (!isset($update['message']['text'])) {
             Log::info('Ignoring unsupported Telegram update.');
@@ -105,6 +97,7 @@ class TelegramWebhookController extends Controller
 
         $chatId = $message['chat']['id'] ?? null;
         $telegramUserId = $message['from']['id'] ?? null;
+        $messageId = $message['message_id'] ?? 0;
         $text = trim((string) $message['text']);
 
         if (!$chatId || !$telegramUserId) {
@@ -122,33 +115,18 @@ class TelegramWebhookController extends Controller
         $firstName = $message['from']['first_name'] ?? '';
         $lastName = $message['from']['last_name'] ?? '';
 
-        $fullName = trim($firstName . ' ' . $lastName)
-            ?: 'No name';
-
-        $username = $message['from']['username']
-            ?? 'No username';
+        $fullName = trim($firstName . ' ' . $lastName) ?: 'No name';
+        $username = $message['from']['username'] ?? 'No username';
 
         $isOwner = $this->isBotOwner($telegramUserId);
 
         Log::info('Telegram message received', [
             'telegram_user_id' => $telegramUserId,
             'username' => $username,
-            'text' => Str::startsWith($text, '/')
-                ? $text
-                : '[user message]',
+            'text' => Str::startsWith($text, '/') ? $text : '[user message]',
         ]);
 
-        /*
-         * Handle commands before interpreting ordinary text as a phone
-         * number. This allows /cancelInvoices to work while awaiting a
-         * phone number.
-         */
         if ($text === '/start' || $text === '/buy') {
-            Log::info('Handling purchase command', [
-                'chat_id' => $chatId,
-                'telegram_user_id' => $telegramUserId,
-                'command' => $text,
-            ]);
             $this->handlePurchaseCommand(
                 $chatId,
                 $telegramUserId,
@@ -161,8 +139,8 @@ class TelegramWebhookController extends Controller
             return response()->json(['status' => 'ok']);
         }
 
-        if ($text === '/resetGroup' && $isOwner) {
-            $this->handleResetGroup($chatId, $telegramUserId);
+        if (Str::startsWith($text, '/resetGroup') && $isOwner) {
+            $this->handleResetGroup($chatId, $telegramUserId, $messageId);
 
             return response()->json(['status' => 'ok']);
         }
@@ -174,20 +152,10 @@ class TelegramWebhookController extends Controller
         }
 
         /*
-         * If the user has an invoice awaiting their M-Pesa number,
-         * treat their next ordinary text message as the phone number.
+         * Process phone number input
          */
         if (!Str::startsWith($text, '/')) {
-            Log::info('Processing phone number input', [
-                'chat_id' => $chatId,
-                'telegram_user_id' => $telegramUserId,
-                'phone_number' => $text,
-            ]);
-
-            $waitingPurchase = Purchase::where(
-                'telegram_id',
-                $telegramUserId
-            )
+            $waitingPurchase = Purchase::where('telegram_id', $telegramUserId)
                 ->whereHas('invoice', function ($query) {
                     $query->where('payment_provider', 'bitika')
                         ->where('status', 'awaiting_phone');
@@ -196,10 +164,6 @@ class TelegramWebhookController extends Controller
                 ->first();
 
             if ($waitingPurchase && $waitingPurchase->invoice) {
-                Log::info('Found invoice awaiting phone number.', [
-                    'invoice_id' => $waitingPurchase->invoice->id,
-                    'telegram_user_id' => $telegramUserId,
-                ]);
                 $this->initiateBitikaPayment(
                     $chatId,
                     $waitingPurchase->invoice,
@@ -229,15 +193,7 @@ class TelegramWebhookController extends Controller
         ?string $clientIp,
         ?string $command = null
     ): void {
-        Log::info('Handling purchase command', [
-            'chat_id' => $chatId,
-            'telegram_user_id' => $telegramUserId,
-            'command' => $command,
-        ]);
-        $existingPurchase = Purchase::where(
-            'telegram_id',
-            $telegramUserId
-        )
+        $existingPurchase = Purchase::where('telegram_id', $telegramUserId)
             ->whereHas('invoice', function ($query) {
                 $query->whereIn('status', [
                     'awaiting_phone',
@@ -249,18 +205,12 @@ class TelegramWebhookController extends Controller
             ->first();
 
         if ($existingPurchase) {
-            Log::info('Found existing purchase.', [
-                'chat_id' => $chatId,
-                'telegram_user_id' => $telegramUserId,
-                'invoice_id' => $existingPurchase->invoice->id,
-            ]);
             $invoice = $existingPurchase->invoice;
 
             if ($invoice && $invoice->status === 'awaiting_phone') {
                 $this->telegram->sendMessage(
                     $chatId,
-                    'You already have a purchase awaiting your M-Pesa '
-                    . "number.\n\n"
+                    "You already have a purchase awaiting your M-Pesa number.\n\n"
                     . 'Enter the number that should receive the STK Push, '
                     . 'or send /cancelInvoices to cancel the request.'
                 );
@@ -269,56 +219,26 @@ class TelegramWebhookController extends Controller
             }
 
             if ($invoice && $invoice->status === 'processing') {
-                Log::info('Purchase is currently processing.', [
-                    'chat_id' => $chatId,
-                    'telegram_user_id' => $telegramUserId,
-                    'invoice_id' => $invoice->id,
-                ]);
                 $this->telegram->sendMessage(
                     $chatId,
                     'Your M-Pesa payment request is being processed. '
                     . 'Please check your phone and wait for confirmation '
-                    . 'before starting another purchase. If You want to initiate another purchase, please send /cancelInvoices to cancel the current request.'
+                    . 'before starting another purchase. Send /cancelInvoices if you need to cancel.'
                 );
 
                 return;
             }
 
             if ($invoice && $invoice->status === 'pending') {
-                Log::info('Purchase is pending payment.', [
-                    'chat_id' => $chatId,
-                    'telegram_user_id' => $telegramUserId,
-                    'invoice_id' => $invoice->id,
-                ]);
-                $expirySeconds = (int) config(
-                    'services.blink.invoice_expiry',
-                    600
-                );
-
-                $expiryDate = $existingPurchase->created_at
-                    ->copy()
-                    ->addSeconds($expirySeconds);
+                $expirySeconds = (int) config('services.blink.invoice_expiry', 600);
+                $expiryDate = $existingPurchase->created_at->copy()->addSeconds($expirySeconds);
 
                 if (now()->greaterThan($expiryDate)) {
-                    Log::info('Pending invoice has expired.', [
-                        'chat_id' => $chatId,
-                        'telegram_user_id' => $telegramUserId,
-                        'invoice_id' => $invoice->id,
-                    ]);
-                    $invoice->update([
-                        'status' => Invoice::STATUS_EXPIRED,
-                    ]);
+                    $invoice->update(['status' => Invoice::STATUS_EXPIRED]);
                 } else {
-                    Log::info('Pending invoice is still valid.', [
-                        'chat_id' => $chatId,
-                        'telegram_user_id' => $telegramUserId,
-                        'invoice_id' => $invoice->id,
-                    ]);
                     $this->telegram->sendMessage(
                         $chatId,
-                        'You already have a pending payment. '
-                        . 'Use /cancelInvoices if you want to cancel '
-                        . 'the request before starting another.'
+                        'You already have a pending payment. Use /cancelInvoices if you want to cancel.'
                     );
 
                     return;
@@ -334,7 +254,6 @@ class TelegramWebhookController extends Controller
                         'callback_data' => 'buy_type_instant',
                     ],
                 ],
-                // Add the goal-based option if you want it displayed:
                 [
                     [
                         'text' => 'Pay to Access VIP Channel',
@@ -347,19 +266,14 @@ class TelegramWebhookController extends Controller
         $message = "1. The amount for fisheries is 7,500 KES.\n"
             . "2. Select the option below to initiate payment.\n"
             . "3. Enter the M-Pesa number that should receive the STK Push.\n"
-            . "4. Your materials will be delivered after payment "
-            . "confirmation.\n\n"
+            . "4. Your materials will be delivered after payment confirmation.\n\n"
             . 'Only make payments through the bot instructions.';
 
-        $this->telegram->sendMessage(
-            $chatId,
-            $message,
-            $keyboard
-        );
+        $this->telegram->sendMessage($chatId, $message, $keyboard);
     }
 
     /**
-     * Create the invoice and purchase before asking for a phone number.
+     * Create invoice and purchase.
      */
     protected function processInvoiceGeneration(
         string $chatId,
@@ -369,35 +283,16 @@ class TelegramWebhookController extends Controller
         string $username,
         ?string $clientIp
     ): void {
-        Log::info('Processing invoice generation', [
-            'chat_id' => $chatId,
-            'telegram_user_id' => $telegramUserId,
-            'is_instant' => $isInstant,
-        ]);
-
-        $existingPurchase = Purchase::where(
-            'telegram_id',
-            $telegramUserId
-        )
+        $existingPurchase = Purchase::where('telegram_id', $telegramUserId)
             ->whereHas('invoice', function ($query) {
-                $query->whereIn('status', [
-                    'awaiting_phone',
-                    'processing',
-                    'pending',
-                ]);
+                $query->whereIn('status', ['awaiting_phone', 'processing', 'pending']);
             })
             ->first();
 
         if ($existingPurchase) {
-            Log::info('User already has an active purchase.', [
-                'chat_id' => $chatId,
-                'telegram_user_id' => $telegramUserId,
-                'invoice_id' => $existingPurchase->invoice->id,
-            ]);
             $this->telegram->sendMessage(
                 $chatId,
-                'You already have an active purchase. '
-                . 'Please complete or cancel it before starting another.'
+                'You already have an active purchase. Please complete or cancel it before starting another.'
             );
 
             return;
@@ -406,11 +301,6 @@ class TelegramWebhookController extends Controller
         $amount = $this->getPurchaseAmount($isInstant);
 
         if ($amount <= 0) {
-            Log::error('Invalid configured purchase amount.', [
-                'instant_buy' => $isInstant,
-                'amount' => $amount,
-            ]);
-
             $this->telegram->sendMessage(
                 $chatId,
                 'Unable to start a purchase right now. Please try again later.'
@@ -442,8 +332,7 @@ class TelegramWebhookController extends Controller
 
             $this->telegram->sendMessage(
                 $chatId,
-                'Unable to create your purchase right now. '
-                . 'Please try again later.'
+                'Unable to create your purchase right now. Please try again later.'
             );
 
             return;
@@ -453,8 +342,7 @@ class TelegramWebhookController extends Controller
             $chatId,
             "💳 *M-Pesa Payment*\n\n"
             . 'Amount: KES ' . number_format($amount) . "\n\n"
-            . 'Enter the Safaricom M-Pesa number that should receive '
-            . "the STK Push.\n\n"
+            . "Enter the Safaricom M-Pesa number that should receive the STK Push.\n\n"
             . "Example: 0712345678\n\n"
             . 'Send /cancelInvoices to cancel this request.',
             ['parse_mode' => 'Markdown']
@@ -462,23 +350,14 @@ class TelegramWebhookController extends Controller
     }
 
     /**
-     * Initiate a Bitika STK Push for an invoice.
+     * Initiate Bitika STK Push.
      */
     protected function initiateBitikaPayment(
         string $chatId,
         Invoice $invoice,
         string $phone
     ): void {
-        Log::info('Initiating Bitika payment', [
-            'chat_id' => $chatId,
-            'invoice_id' => $invoice->id,
-            'phone_number' => $phone,
-        ]);
         if ($invoice->status !== 'awaiting_phone') {
-            Log::warning('Invoice is not awaiting a phone number.', [
-                'invoice_id' => $invoice->id,
-                'current_status' => $invoice->status,
-            ]);
             $this->telegram->sendMessage(
                 $chatId,
                 'This payment request is no longer awaiting a phone number.'
@@ -488,13 +367,11 @@ class TelegramWebhookController extends Controller
         }
 
         try {
-
             $phone = $this->formatPhoneNumber($phone);
         } catch (\InvalidArgumentException $e) {
             $this->telegram->sendMessage(
                 $chatId,
-                'Invalid Kenyan mobile number. Enter a number such as '
-                . '0712345678 or 254712345678.'
+                'Invalid Kenyan mobile number. Enter a number such as 0712345678 or 254712345678.'
             );
 
             return;
@@ -503,24 +380,14 @@ class TelegramWebhookController extends Controller
         $amount = (int) $invoice->amount_kes;
 
         if ($amount <= 0) {
-            Log::error('Invoice has an invalid KES amount.', [
-                'invoice_id' => $invoice->id,
-            ]);
-
             $this->telegram->sendMessage(
                 $chatId,
-                'Unable to start payment for this invoice. '
-                . 'Please contact support.'
+                'Unable to start payment for this invoice. Please contact support.'
             );
 
             return;
         }
 
-        /*
-         * Persist a single payment attempt before making the external
-         * request. This also prevents a duplicate Telegram update from
-         * creating a second STK Push for the same invoice.
-         */
         $idempotencyKey = (string) Str::uuid();
 
         $updated = Invoice::whereKey($invoice->id)
@@ -534,65 +401,32 @@ class TelegramWebhookController extends Controller
             ]);
 
         if (!$updated) {
-            Log::warning('Invoice status changed before payment initiation.', [
-                'invoice_id' => $invoice->id,
-                'current_status' => $invoice->status,
-            ]);
             $this->telegram->sendMessage(
                 $chatId,
-                'This payment request has already been submitted. '
-                . 'Please wait for its status to be confirmed.'
+                'This payment request has already been submitted. Please wait for its status to be confirmed.'
             );
 
             return;
         }
 
         try {
-            Log::info('Sending STK Push request to Bitika.', [
-                'invoice_id' => $invoice->id,
-                'phone_number' => $phone,
-                'amount_kes' => $amount,
-                'idempotency_key' => $idempotencyKey,
-            ]);
-            $response = $this->bitika->collect(
-                $phone,
-                $amount,
-                $idempotencyKey
-            );
-
+            $response = $this->bitika->collect($phone, $amount, $idempotencyKey);
             $data = $response['response'] ?? $response;
-
             $status = strtolower((string) ($data['status'] ?? ''));
+            $transactionCode = $data['transaction_code'] ?? $data['transactionCode'] ?? null;
 
-            $transactionCode = $data['transaction_code']
-                ?? $data['transactionCode']
-                ?? null;
-
-            /*
-             * Confirm the exact status and field names against the
-             * response returned by your BitikaPaymentService.
-             */
             $acceptedStatuses = ['processing', 'pending'];
 
-            if (
-                !$transactionCode
-                || !in_array($status, $acceptedStatuses, true)
-            ) {
+            if (!$transactionCode || !in_array($status, $acceptedStatuses, true)) {
                 $invoice->update([
                     'status' => 'failed',
                     'payment_error' => 'Bitika did not confirm STK initiation.',
                     'payment_metadata' => $data,
                 ]);
 
-                Log::warning('Bitika did not accept the payment request.', [
-                    'invoice_id' => $invoice->id,
-                    'response' => $data,
-                ]);
-
                 $this->telegram->sendMessage(
                     $chatId,
-                    'Unable to confirm that the STK Push was initiated. '
-                    . 'Please contact support before attempting another payment.'
+                    'Unable to confirm that the STK Push was initiated. Please contact support.'
                 );
 
                 return;
@@ -609,17 +443,10 @@ class TelegramWebhookController extends Controller
                 . "Phone: {$phone}\n"
                 . 'Amount: KES ' . number_format($amount) . "\n"
                 . "Reference: {$transactionCode}\n\n"
-                . 'Check your phone and follow the M-Pesa prompt. '
-                . 'Your purchase will be delivered after payment is confirmed.',
+                . 'Check your phone and follow the M-Pesa prompt. Your purchase will be delivered after payment is confirmed.',
                 ['parse_mode' => 'Markdown']
             );
         } catch (Throwable $e) {
-            /*
-             * A timeout does not necessarily mean Bitika failed to
-             * receive the request. Keep the invoice processing to
-             * avoid accidentally initiating a duplicate payment.
-             * Reconcile it using Bitika's transaction-status API.
-             */
             $invoice->update([
                 'payment_error' => 'Could not confirm the STK initiation response.',
             ]);
@@ -631,18 +458,11 @@ class TelegramWebhookController extends Controller
 
             $this->telegram->sendMessage(
                 $chatId,
-                'We could not confirm the payment request status. '
-                . 'Please do not retry the payment yet. '
-                . 'Contact support so the transaction can be checked.'
+                'We could not confirm the payment request status. Please contact support so the transaction can be checked.'
             );
         }
     }
 
-    /**
-     * Return the configured amount for the selected purchase type.
-     *
-     * Bitika amounts are in KES, not millisatoshis.
-     */
     protected function getPurchaseAmount(bool $isInstant): int
     {
         if ($isInstant) {
@@ -658,35 +478,16 @@ class TelegramWebhookController extends Controller
         );
     }
 
-    /**
-     * Normalize a Kenyan mobile number to 254XXXXXXXXX.
-     */
     protected function formatPhoneNumber(string $phone): string
     {
         $phone = trim($phone);
-
-        // Allow common formatting characters such as spaces and hyphens.
         $cleaned = preg_replace('/[\s().-]+/', '', $phone);
 
-        if (!is_string($cleaned)) {
-            throw new \InvalidArgumentException(
-                'Invalid Kenyan mobile phone number.'
-            );
-        }
-
-        if (!preg_match('/^(?:\+?254|0)?[71]\d{8}$/', $cleaned)) {
-            throw new \InvalidArgumentException(
-                'Invalid Kenyan mobile phone number.'
-            );
+        if (!is_string($cleaned) || !preg_match('/^(?:\+?254|0)?[71]\d{8}$/', $cleaned)) {
+            throw new \InvalidArgumentException('Invalid Kenyan mobile phone number.');
         }
 
         $digits = preg_replace('/\D/', '', $cleaned);
-
-        if (!is_string($digits)) {
-            throw new \InvalidArgumentException(
-                'Invalid Kenyan mobile phone number.'
-            );
-        }
 
         if (str_starts_with($digits, '0')) {
             return '254' . substr($digits, 1);
@@ -696,46 +497,24 @@ class TelegramWebhookController extends Controller
             return $digits;
         }
 
-        if (
-            strlen($digits) === 9
-            && (
-                str_starts_with($digits, '7')
-                || str_starts_with($digits, '1')
-            )
-        ) {
+        if (strlen($digits) === 9 && (str_starts_with($digits, '7') || str_starts_with($digits, '1'))) {
             return '254' . $digits;
         }
 
-        throw new \InvalidArgumentException(
-            'Invalid Kenyan mobile phone number.'
-        );
+        throw new \InvalidArgumentException('Invalid Kenyan mobile phone number.');
     }
 
-    /**
-     * Cancel invoices that have not yet entered payment processing.
-     *
-     * A processing STK Push is deliberately not cancelled locally:
-     * Bitika may already have sent it to the customer's phone.
-     */
-    protected function cancelPendingInvoices(
-        string $chatId,
-        string $telegramUserId
-    ): void {
+    protected function cancelPendingInvoices(string $chatId, string $telegramUserId): void
+    {
         $purchases = Purchase::where('telegram_id', $telegramUserId)
             ->whereHas('invoice', function ($query) {
-                $query->whereIn('status', [
-                    'awaiting_phone',
-                    'pending',
-                ]);
+                $query->whereIn('status', ['awaiting_phone', 'pending']);
             })
             ->with('invoice')
             ->get();
 
         if ($purchases->isEmpty()) {
-            $processingPurchase = Purchase::where(
-                'telegram_id',
-                $telegramUserId
-            )
+            $processingPurchase = Purchase::where('telegram_id', $telegramUserId)
                 ->whereHas('invoice', function ($query) {
                     $query->where('status', 'processing');
                 })
@@ -744,9 +523,7 @@ class TelegramWebhookController extends Controller
             $this->telegram->sendMessage(
                 $chatId,
                 $processingPurchase
-                    ? 'Your STK Push may already be active. '
-                        . 'It cannot be safely cancelled here; '
-                        . 'please wait for confirmation or contact support.'
+                    ? 'Your STK Push may already be active. Please wait for confirmation.'
                     : 'You have no cancellable payment requests.'
             );
 
@@ -756,21 +533,8 @@ class TelegramWebhookController extends Controller
         foreach ($purchases as $purchase) {
             $invoice = $purchase->invoice;
 
-            if (
-                $invoice
-                && in_array($invoice->status, [
-                    'awaiting_phone',
-                    'pending',
-                ], true)
-            ) {
-                $invoice->update([
-                    'status' => Invoice::STATUS_CANCELLED,
-                ]);
-
-                Log::info('Invoice cancelled by Telegram user.', [
-                    'invoice_id' => $invoice->id,
-                    'telegram_user_id' => $telegramUserId,
-                ]);
+            if ($invoice && in_array($invoice->status, ['awaiting_phone', 'pending'], true)) {
+                $invoice->update(['status' => Invoice::STATUS_CANCELLED]);
             }
         }
 
@@ -780,23 +544,20 @@ class TelegramWebhookController extends Controller
         );
     }
 
-    /**
-     * Check whether a Telegram user is the configured bot owner.
-     */
     protected function isBotOwner(string $telegramUserId): bool
     {
         $ownerId = config('services.telegram.owner_id');
 
-        return $ownerId !== null
-            && (string) $ownerId === $telegramUserId;
+        return $ownerId !== null && (string) $ownerId === $telegramUserId;
     }
 
     /**
-     * Reset the configured Telegram group, retaining administrators.
+     * Reset the configured Telegram group, retaining administrators and purging recent messages.
      */
     protected function handleResetGroup(
         string $chatId,
-        string $telegramUserId
+        string $telegramUserId,
+        int $latestMessageId = 0
     ): void {
         Log::info('Group reset command initiated.', [
             'telegram_user_id' => $telegramUserId,
@@ -828,8 +589,7 @@ class TelegramWebhookController extends Controller
 
                 $this->telegram->sendMessage(
                     $chatId,
-                    '❌ Unable to fetch group members. '
-                    . 'Confirm that the bot has the required permissions.'
+                    '❌ Unable to fetch group members. Confirm bot permissions.'
                 );
 
                 return;
@@ -842,8 +602,7 @@ class TelegramWebhookController extends Controller
 
             $this->telegram->sendMessage(
                 $chatId,
-                "📊 Found {$totalMembers} members. "
-                . 'Removing non-admin users...'
+                "📊 Found {$totalMembers} members. Removing non-admin users..."
             );
 
             foreach ($members as $member) {
@@ -856,57 +615,38 @@ class TelegramWebhookController extends Controller
                     continue;
                 }
 
-                $userName = $user['username']
-                    ?? $user['first_name']
-                    ?? 'Unknown';
+                $userName = $user['username'] ?? $user['first_name'] ?? 'Unknown';
 
                 if (in_array($status, ['administrator', 'creator'], true)) {
                     $adminCount++;
                     continue;
                 }
 
-                // Avoid removing the bot itself.
-                if (
-                    (string) $userId
-                    === (string) config('services.telegram.bot_user_id')
-                ) {
+                if ((string) $userId === (string) config('services.telegram.bot_user_id')) {
                     continue;
                 }
 
-                $removed = $this->telegram->kickChatMember(
-                    $groupChatId,
-                    $userId
-                );
+                $removed = $this->telegram->kickChatMember($groupChatId, $userId);
 
                 if ($removed) {
                     $removedCount++;
-
-                    Log::info('Removed Telegram group member.', [
-                        'user_id' => $userId,
-                        'username' => $userName,
-                    ]);
                 } else {
                     $failedCount++;
-
-                    Log::warning('Could not remove Telegram group member.', [
-                        'user_id' => $userId,
-                        'username' => $userName,
-                    ]);
                 }
 
-                // Small delay to reduce the risk of hitting API limits.
                 usleep(50000);
             }
+
             // --- DELETING MESSAGES ---
-            $deletedMessagesCount = $this->purgeGroupMessages($groupChatId);
+            $deletedMessagesCount = $this->purgeGroupMessages($groupChatId, $latestMessageId);
 
             $summary = "✅ *Group Reset Complete!*\n\n"
                 . "📊 *Statistics:*\n"
                 . "├ Total members: {$totalMembers}\n"
                 . "├ 👑 Admins kept: {$adminCount}\n"
                 . "├ 🗑️ Removed users: {$removedCount}\n"
+                . "├ 🗑️ Deleted messages: {$deletedMessagesCount}\n"
                 . "└ ❌ Failed removals: {$failedCount}\n\n"
-                . "🗑️ Deleted messages: {$deletedMessagesCount}\n"
                 . '🔒 Group reset finished.';
 
             $this->telegram->sendMessage(
@@ -919,6 +659,7 @@ class TelegramWebhookController extends Controller
                 'total' => $totalMembers,
                 'removed' => $removedCount,
                 'admins_kept' => $adminCount,
+                'deleted_messages' => $deletedMessagesCount,
                 'failed' => $failedCount,
             ]);
         } catch (Throwable $e) {
@@ -929,39 +670,31 @@ class TelegramWebhookController extends Controller
 
             $this->telegram->sendMessage(
                 $chatId,
-                '❌ An error occurred during the group reset. '
-                . 'Check the application logs for details.'
+                '❌ An error occurred during the group reset. Check application logs.'
             );
         }
     }
 
     /**
      * Purge group messages using Telegram's deleteMessages API in chunks of 100.
-     * Note: Telegram Bot API can only delete messages sent within the last 48 hours.
      */
     protected function purgeGroupMessages(string $groupChatId, int $latestMessageId = 0): int
     {
-        // 1. Option A: Retrieve tracked message IDs from database
-        // $messageIds = GroupMessage::where('chat_id', $groupChatId)
-        //     ->where('created_at', '>=', now()->subHours(48))
-        //     ->pluck('message_id')
-        //     ->toArray();
+        Log::info('Starting message purge for Telegram group.', [
+            'group_chat_id' => $groupChatId,
+            'latest_message_id' => $latestMessageId,
+        ]);
 
-        // 2. Option B: Reverse loop from latest message ID if tracked or passed
         if ($latestMessageId <= 0) {
-            return 0; // Skip if no message tracking is active
+            return 0;
         }
 
         $deletedCount = 0;
-        // Attempt to purge a batch window (e.g., last 500 messages)
         $startId = max(1, $latestMessageId - 500);
         $allIds = range($latestMessageId, $startId);
 
-        // Telegram deleteMessages accepts up to 100 message_ids per call
         foreach (array_chunk($allIds, 100) as $chunk) {
             try {
-                // Endpoint: POST https://api.telegram.org/bot<token>/deleteMessages
-                // Payload: ['chat_id' => $groupChatId, 'message_ids' => $chunk]
                 $success = $this->telegram->deleteMessages($groupChatId, $chunk);
 
                 if ($success) {
@@ -973,7 +706,7 @@ class TelegramWebhookController extends Controller
                 ]);
             }
 
-            usleep(300000); // 300ms pause between bulk deletes to respect rate limits
+            usleep(300000); // 300ms pause to respect rate limits
         }
 
         return $deletedCount;
