@@ -1,141 +1,224 @@
+Here is a detailed `README.md` file designed specifically for your project repository at [J-Thumi/Telegram-Bot-Blink-link](https://github.com/J-Thumi/Telegram-Bot-Blink-link).
 
-# Telegram Premium Access Bot with Blink Lightning Payments
+---
 
-This Laravel application provides a complete system for selling access to a private Telegram channel. Users pay via M-Pesa (using Bitika as a Lightning -> M-Pesa bridge) and receive a single-use invite link to your channel.
+# Telegram Bot & Automated Content Delivery System
 
-## System Flow
+An automated e-commerce and content delivery pipeline built with **Laravel**, **Filament Admin**, and **Telegram Bot API**, integrated with **Bitika** (M-Pesa to Bitcoin Lightning Network gateway).
 
-1.  User sends `/buy` to your Telegram bot.
-2.  Bot communicates with your Laravel backend.
-3.  Laravel creates a Lightning invoice via the Blink API.
-4.  Bot sends the invoice to the user with a "Pay via M-Pesa (Bitika)" button.
-5.  User pays using M-Pesa on Bitika.xyz.
-6.  Bitika settles the Lightning invoice on Blink.
-7.  Blink sends a webhook to your Laravel app confirming payment.
-8.  Laravel uses the Telegram Bot API to generate a **single-use invite link** for your private channel.
-9.  Laravel sends the invite link to the user via the bot.
-10. User clicks the link and joins. The link expires after first use.
+This application manages automated subscriptions, processes Safaricom M-Pesa STK Push payments, generates dynamic single-use invite links for VIP Telegram channels, and automates scheduled content delivery based on member thresholds and due dates.
+
+---
+
+## Key Features
+
+* **Bitika M-Pesa Integration:** Collect payments via Safaricom M-Pesa STK Push with Lightning Network settlement via Bitika API.
+
+
+* **Dual Purchase Options:**
+* **Instant Access:** Direct delivery of upcoming exam/subject materials straight to the user's Telegram DM upon payment confirmation.
+
+
+* **VIP Channel Access:** Automated creation and delivery of single-use, non-shareable Telegram channel invite links upon payment verification.
+
+
+
+
+* **Automated Scheduled Dispatch:** Console commands (`subjects:check-due-images`) automatically evaluate member count thresholds in the VIP channel and dispatch subject materials due within 24 hours.
+
+
+* **Group & Admin Management:** Bot owner administrative commands (`/resetGroup`) to remove non-admin members and purge recent group chat history in bulk using Telegram Bot API 7.0+.
+
+
+* **Filament Admin Panel:** Comprehensive dashboard to manage subjects, upload media/images, track purchases, monitor payment statuses, and trigger manual content dispatches.
+
+
+* **Idempotency & Concurrency:** Database row locking (`lockForUpdate`) and UUID idempotency keys ensure no duplicate STK pushes or double-fulfillments occur.
+
+
+
+---
+
+## Architecture & Workflow
+
+```
+       +------------------+             +----------------------+
+       |   Telegram User  |             | Safaricom / Bitika   |
+       +--------+---------+             +----------+-----------+
+                |                                  |
+   1. /start    |                                  |
+   2. Selects   |                                  | 4. STK Push & Webhook
+      Option    v                                  v
++---------------+----------------------------------+---------------+
+|                 Laravel Application (Webhook Engine)             |
+|                                                                  |
+|  +-------------------+   Atomic Lock   +----------------------+  |
+|  | Telegram Controller| --------------> | Bitika Controller    |  |
+|  +---------+---------+                 +----------+-----------+  |
+|            |                                      |              |
+|            v                                      v              |
+|  +-------------------+                 +----------------------+  |
+|  |  Purchase Model   |                 | PurchaseFulfillment  |  |
+|  +-------------------+                 +----------+-----------+  |
++---------------------------------------------------|--------------+
+                                                    |
+                                 5. Send Invite Link| or Direct Content
+                                                    v
+                                       +------------+------------+
+                                       | Telegram Channel/User   |
+                                       +-------------------------+
+
+```
+
+---
 
 ## Tech Stack
 
-- **Laravel 11.x** – Backend framework.
-- **MySQL / PostgreSQL** – Database to track invoices and purchases.
-- **Blink API** – Lightning Network invoice generation and webhooks.
-- **Telegram Bot API** – Bots, messages, and invite links.
-- **Bitika.xyz** – M-Pesa to Lightning proxy for the user.
+* **Framework:** Laravel 11.x
 
-## Prerequisites
 
-- PHP 8.2+ with Composer.
-- A VPS with a public domain name and HTTPS (required for webhooks).
-- A Telegram Bot token from [@BotFather](https://t.me/botfather).
-- A private Telegram channel where you will add the bot as an administrator.
-- A Blink wallet account and API keys (from [Blink](https://blink.sv/)).
+* **Admin Panel:** Filament PHP v3
 
-## Installation
 
-### 1. Clone the repository and install dependencies
+* **Payment Gateway:** Bitika API (M-Pesa STK Push / Lightning)
 
+
+* **Messaging Platform:** Telegram Bot API (via Laravel HTTP Client)
+
+
+* **Database:** MySQL / PostgreSQL
+
+
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+* PHP >= 8.2
+* Composer
+* MySQL / MariaDB
+* Configured Telegram Bot (via [@BotFather](https://t.me/BotFather))
+* Bitika API Credentials
+
+### Installation
+
+1. **Clone the Repository:**
 ```bash
-git clone git@github.com:J-Thumi/Telegram-Bot-Blink-link.git
+git clone https://github.com/J-Thumi/Telegram-Bot-Blink-link.git
 cd Telegram-Bot-Blink-link
+
+```
+
+
+2. **Install Dependencies:**
+```bash
 composer install
 
+```
 
-### 2. Environment Configuration
 
-Copy the example environment file and edit it.
-
+3. **Configure Environment Variables:**
+Copy `.env.example` to `.env` and configure your credentials:
 ```bash
 cp .env.example .env
 php artisan key:generate
+
 ```
 
-Add the following variables to your `.env` file:
 
+Add your Telegram and Bitika configurations to `.env`:
 ```ini
-# Telegram
-TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_CHANNEL_USERNAME=@my_premium_channel
-TELEGRAM_WEBHOOK_SECRET=your_super_secret_webhook_token
+# Telegram Configuration
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_CHANNEL_ID=-100xxxxxxxxxx
+TELEGRAM_CHANNEL_USERNAME=@your_channel_username
+TELEGRAM_WEBHOOK_SECRET=your_custom_secret_string
+TELEGRAM_OWNER_ID=123456789
+TELEGRAM_BOT_USER_ID=987654321
 
-# Blink Lightning API
-BLINK_API_KEY=blink_live_abcdefghijklmnopqrstuv
-BLINK_API_URL=https://api.blink.sv
+# Bitika Payment Gateway Configuration
+BITIKA_BASE_URL=https://bitikaserver.up.railway.app
+BITIKA_API_KEY=your_bitika_api_key
+BITIKA_LIGHTNING_ADDRESS=your_address@ln.tips
+BITIKA_INSTANT_BUY_AMOUNT=7500
+BITIKA_INVOICE_AMOUNT=100
 
-# App
-APP_URL=https://your-vps-domain.com
 ```
 
-### 3. Database Setup
 
-Create a database and configure your `.env` `DB_*` variables. Then run migrations:
-
+4. **Run Migrations & Seeders:**
 ```bash
-php artisan migrate
+php artisan migrate --seed
+
 ```
 
-### 4. Set Up the Telegram Webhook
 
-Make sure your Laravel app is accessible from the internet (e.g., running on your VPS). Then run:
-
+5. **Create Filament Admin User:**
 ```bash
-php artisan telegram:set-webhook
+php artisan make:filament-user
+
 ```
 
-This command tells Telegram to send all updates to `https://your-domain.com/api/telegram/webhook`.
 
-### 5. Add Bot to Your Private Channel
+6. **Set Telegram Webhook:**
+Run the custom Artisan command to set up your webhook URL with Telegram:
+```bash
+php artisan telegram:manage-bot
 
-1.  Open your private Telegram channel.
-2.  Go to channel info -> Administrators -> Add Administrator.
-3.  Search for your bot's username (e.g., `@MyAccessBot`).
-4.  Give it at least the **"Invite users"** and **"Manage invite links"** permissions.
+```
 
-### 6. Configure Blink Webhook
 
-In your Blink dashboard (or via their API), set a webhook URL to `https://your-domain.com/api/blink/webhook`. Enable the `invoice.paid` event. You should also generate and verify a secret token for this webhook (see Security section below).
 
-## Security – Important!
+---
 
-- **Telegram Webhook Secret:** The code example uses a `secret_token` when setting the webhook. Telegram will send this token in the `X-Telegram-Bot-Api-Secret-Token` header. **You must verify this header** in your `TelegramWebhookController` to ensure requests are from Telegram. (Add a middleware or check in the `handle()` method).
-- **Blink Webhook Signature:** Blink's API may include a signature header (e.g., `X-Signature`). **Implement verification** inside `BlinkWebhookController` to prevent fake payment callbacks.
-- **Database Transactions:** Wrap critical paths (creating invoice + purchase) in a database transaction to avoid inconsistencies.
+## Telegram Bot Commands
 
-## Usage
+| Command | Permission | Description |
+| --- | --- | --- |
+| `/start` or `/buy` | All Users | Opens interactive purchasing menu for Instant Access or VIP Access.
 
-1.  Start your Laravel queue worker (if processing any jobs) and ensure your web server is running.
-2.  Open Telegram, find your bot, and send `/buy` or `/start`.
-3.  The bot will reply with a Lightning invoice and a payment button.
-4.  Click the button to pay via M-Pesa on Bitika.xyz.
-5.  After successful payment, the bot will instantly send you your single-use invite link.
-6.  Click the link to join your private channel.
+ |
+| `/cancelInvoices` | All Users | Cancels pending/unpaid invoice requests for the user.
 
-## Customization
+ |
+| `/resetGroup` | Bot Owner Only | Removes all non-admin members from the target channel/group and purges recent messages in bulk.
 
-- **Change price:** Edit the `$amountInSatoshis` variable in `TelegramWebhookController@handlePurchaseCommand`.
-- **Change invite link expiry:** Modify the `$expireInSeconds` argument in `TelegramService@createSingleUseInviteLink`.
-- **Add subscription logic:** Use Laravel's scheduler to revoke links after a month and send renewal invoices.
+ |
 
-## Troubleshooting
+---
 
-- **Webhook not working?** Check your `storage/logs/laravel.log`. Also ensure `APP_URL` is correct and your VPS is reachable from the internet.
-- **"Bot can't invite users" error:** Make sure the bot is an admin in your private channel with the correct permissions.
-- **Invoice not marked as paid?** Check the Blink webhook is reaching your server. Use a tool like ngrok for local testing.
+## Artisan Commands
+
+| Command | Description |
+| --- | --- |
+| `php artisan telegram:manage-bot` | Configures, checks info, or removes Telegram webhooks.
+
+ |
+| `php artisan subjects:check-due-images` | Scheduled job that checks for subjects due in 24 hours and dispatches images if channel member criteria are met.
+
+ |
+| `php artisan subjects:send-specific {subject_id}` | Manually force-sends all images for a specific subject directly to the target channel.
+
+ |
+
+---
+
+## Security & Reliability
+
+* **Database Transactions & Locking:** Invoices use atomic `lockForUpdate()` transactions to prevent race conditions during webhook delivery.
+
+
+* **Strict Validation:** Kenyan mobile numbers are normalized to `254XXXXXXXXX` format prior to initiating payment requests.
+
+
+* **Signature/Secret Token Verification:** Webhook updates validate `X-Telegram-Bot-Api-Secret-Token` to ensure requests originate exclusively from Telegram servers.
+
+
+
+---
 
 ## License
 
-This project is open-source and available under the MIT License.
-
-### Final Steps and Recommendations
-
-1.  **Implement Webhook Security**: The code comments highlight where you need to add signature verification. This is **non-negotiable** for a production app.
-2.  **Queues for Reliability**: The `handlePurchaseCommand` and webhook controller can be made more robust by dispatching jobs to handle API calls (e.g., `SendTelegramMessage`, `CreateBlinkInvoice`). This prevents timeouts.
-3.  **Testing**: Write unit and feature tests for your services and controllers.
-4.  **Deployment**:
-    *   Set up a VPS with Nginx and PHP-FPM.
-    *   Configure SSL (e.g., using Let's Encrypt).
-    *   Set up a queue worker using Supervisor.
-    *   Deploy using a tool like Envoyer, Forge, or a simple Git pull script.
-
-You now have a complete, step-by-step blueprint. Build, test, and deploy with confidence. If you encounter any specific issues (like a Blink API response format difference), check their developer docs and adjust the `BlinkService` accordingly. Good luck with your project
+This project is open-source software licensed under the [MIT License](https://www.google.com/search?q=LICENSE).
