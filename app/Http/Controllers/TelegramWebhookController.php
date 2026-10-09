@@ -335,12 +335,12 @@ class TelegramWebhookController extends Controller
                     ],
                 ],
                 // Add the goal-based option if you want it displayed:
-                // [
-                //     [
-                //         'text' => 'Goal-based Access',
-                //         'callback_data' => 'buy_type_goal',
-                //     ],
-                // ],
+                [
+                    [
+                        'text' => 'Pay to Access VIP Channel',
+                        'callback_data' => 'buy_type_goal',
+                    ],
+                ],
             ],
         ];
 
