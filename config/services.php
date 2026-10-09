@@ -8,6 +8,15 @@ return [
         'invoice_expiry' => env('BLINK_INVOICE_EXPIRY', 600), // Invoice expiry in seconds (default 10 minutes)
         'instant_buy_amount' => env('BLINK_AMOUNT_INSTANT_BUY_AMOUNT', 100), // Amount in satoshis for instant buy
     ],
+    'bitika' => [
+        'base_url' => env(
+            'BITIKA_BASE_URL',
+            'https://bitikaserver.up.railway.app'
+        ),
+        'api_key' => env('BITIKA_API_KEY'),
+        'lightning_address' => env('BITIKA_LIGHTNING_ADDRESS'),
+        'fixed_amount' => env('BITIKA_FIXED_AMOUNT', 500),
+    ],
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
         'channel_username' => env('TELEGRAM_CHANNEL_USERNAME'),
