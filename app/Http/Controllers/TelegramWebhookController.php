@@ -2,334 +2,933 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\TelegramService;
-use App\Services\BlinkService;
 use App\Models\Invoice;
 use App\Models\Purchase;
 use App\Models\Subject;
+use App\Services\BitikaPaymentService;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Throwable;
 
 class TelegramWebhookController extends Controller
 {
-    protected TelegramService $telegram;
-    protected BlinkService $blink;
-
-    public function __construct(TelegramService $telegram, BlinkService $blink)
-    {
-        $this->telegram = $telegram;
-        $this->blink = $blink;
-    }
+    public function __construct(
+        protected TelegramService $telegram,
+        protected BitikaPaymentService $bitika
+    ) {}
 
     /**
-     * Handle incoming updates from Telegram.
-     * This is the endpoint you set as your bot's webhook.
+     * Handle incoming Telegram updates.
      */
     public function handle(Request $request)
     {
         $update = $request->all();
-        Log::info('Telegram webhook received', $update);
+
+        Log::info('Telegram webhook received', [
+            'update_id' => $update['update_id'] ?? null,
+            'has_callback' => isset($update['callback_query']),
+            'has_message' => isset($update['message']),
+        ]);
 
         $clientIp = $request->ip();
-        Log::info('Client IP address', ['ip' => $clientIp]);
 
-        // --- 1. HANDLE CALLBACK QUERIES (Button Clicks) ---
+        /*
+         * 1. Handle inline keyboard callbacks.
+         */
         if (isset($update['callback_query'])) {
-            $callbackQuery = $update['callback_query'];
-            $data = $callbackQuery['data']; 
-            $chatId = $callbackQuery['message']['chat']['id'];
-            $telegramUserId = $callbackQuery['from']['id'];
-            
-            // Extract user info for the invoice
-            $firstName = $callbackQuery['from']['first_name'] ?? '';
-            $lastName = $callbackQuery['from']['last_name'] ?? '';
-            $fullName = trim($firstName . ' ' . $lastName) ?: 'No name';
-            $username = $callbackQuery['from']['username'] ?? 'No username';
+            $callback = $update['callback_query'];
 
-            Log::info("Callback received from user {$username}: {$data}");
+            $data = $callback['data'] ?? '';
+            $chatId = $callback['message']['chat']['id'] ?? null;
+            $telegramUserId = $callback['from']['id'] ?? null;
 
-            if ($data === 'buy_type_instant') {
-                $this->processInvoiceGeneration($chatId, $telegramUserId, true, $fullName, $username, $clientIp);
-            } elseif ($data === 'buy_type_goal') {
-                $this->processInvoiceGeneration($chatId, $telegramUserId, false, $fullName, $username, $clientIp);
+            if (!$chatId || !$telegramUserId) {
+                return response()->json([
+                    'status' => 'invalid_callback',
+                ]);
             }
 
-            // Always answer the callback so the user doesn't see a loading spinner
-            // $this->telegram->answerCallbackQuery($callbackQuery['id']);
+            $firstName = $callback['from']['first_name'] ?? '';
+            $lastName = $callback['from']['last_name'] ?? '';
+
+            $fullName = trim($firstName . ' ' . $lastName)
+                ?: 'No name';
+
+            $username = $callback['from']['username']
+                ?? 'No username';
+
+            Log::info('Telegram callback received', [
+                'telegram_user_id' => $telegramUserId,
+                'username' => $username,
+                'callback_data' => $data,
+            ]);
+
+            if ($data === 'buy_type_instant') {
+                $this->processInvoiceGeneration(
+                    (string) $chatId,
+                    (string) $telegramUserId,
+                    true,
+                    $fullName,
+                    $username,
+                    $clientIp
+                );
+            } elseif ($data === 'buy_type_goal') {
+                $this->processInvoiceGeneration(
+                    (string) $chatId,
+                    (string) $telegramUserId,
+                    false,
+                    $fullName,
+                    $username,
+                    $clientIp
+                );
+            }
+
+            // Answer the callback if TelegramService supports this method.
+            // Uncomment if your TelegramService implements it:
+            // $this->telegram->answerCallbackQuery($callback['id']);
+
             return response()->json(['status' => 'ok']);
         }
 
-        // --- 2. HANDLE STANDARD MESSAGES (Existing Logic) ---
-        if (isset($update['message']['text'])) {
-            $chatId = $update['message']['chat']['id'];
-            $text = trim($update['message']['text']);
-            $telegramUserId = $update['message']['from']['id'];
+        /*
+         * 2. Handle standard text messages.
+         */
+        if (!isset($update['message']['text'])) {
+            Log::info('Ignoring unsupported Telegram update.');
 
-            $firstName = $update['message']['from']['first_name'] ?? '';
-            $lastName = $update['message']['from']['last_name'] ?? '';
-            $fullName = trim($firstName . ' ' . $lastName) ?: 'No name';
-            $username = $update['message']['from']['username'] ?? 'No username';
-
-            Log::info("Received message from user {$username}: {$text}");
-
-            $isOwner = $this->isBotOwner($telegramUserId);
-
-            if ($text === '/start' || $text === '/buy') {
-                // This now triggers the "Choice" message (Instant vs Goal)
-                $this->handlePurchaseCommand($chatId, $telegramUserId, $fullName, $username, $clientIp,$text);
-            } elseif ($text === '/resetGroup' && $isOwner) {
-                Log::info("User {$username} initiated group reset.");
-                $this->handleResetGroup($chatId, $telegramUserId);
-            } elseif ($text === '/cancelInvoices') {
-                Log::info("User {$username} requested to cancel pending invoices.");
-                $this->canclelPendingInvoices($chatId, $telegramUserId);
-            } else {
-                Log::info("Received unknown command from user {$username}: {$text}");
-                $this->telegram->sendMessage($chatId, "🤖 Use /start to get access.");
-            }
-        } else {
-            Log::info('Received non-text message or unsupported update, ignoring.', $update);
+            return response()->json(['status' => 'ok']);
         }
+
+        $message = $update['message'];
+
+        $chatId = $message['chat']['id'] ?? null;
+        $telegramUserId = $message['from']['id'] ?? null;
+        $text = trim((string) $message['text']);
+
+        if (!$chatId || !$telegramUserId) {
+            Log::warning('Telegram message missing chat or user ID.', [
+                'message' => $message,
+            ]);
+            return response()->json([
+                'status' => 'invalid_message',
+            ]);
+        }
+
+        $chatId = (string) $chatId;
+        $telegramUserId = (string) $telegramUserId;
+
+        $firstName = $message['from']['first_name'] ?? '';
+        $lastName = $message['from']['last_name'] ?? '';
+
+        $fullName = trim($firstName . ' ' . $lastName)
+            ?: 'No name';
+
+        $username = $message['from']['username']
+            ?? 'No username';
+
+        $isOwner = $this->isBotOwner($telegramUserId);
+
+        Log::info('Telegram message received', [
+            'telegram_user_id' => $telegramUserId,
+            'username' => $username,
+            'text' => Str::startsWith($text, '/')
+                ? $text
+                : '[user message]',
+        ]);
+
+        /*
+         * Handle commands before interpreting ordinary text as a phone
+         * number. This allows /cancelInvoices to work while awaiting a
+         * phone number.
+         */
+        if ($text === '/start' || $text === '/buy') {
+            Log::info('Handling purchase command', [
+                'chat_id' => $chatId,
+                'telegram_user_id' => $telegramUserId,
+                'command' => $text,
+            ]);
+            $this->handlePurchaseCommand(
+                $chatId,
+                $telegramUserId,
+                $fullName,
+                $username,
+                $clientIp,
+                $text
+            );
+
+            return response()->json(['status' => 'ok']);
+        }
+
+        if ($text === '/resetGroup' && $isOwner) {
+            $this->handleResetGroup($chatId, $telegramUserId);
+
+            return response()->json(['status' => 'ok']);
+        }
+
+        if ($text === '/cancelInvoices') {
+            $this->cancelPendingInvoices($chatId, $telegramUserId);
+
+            return response()->json(['status' => 'ok']);
+        }
+
+        /*
+         * If the user has an invoice awaiting their M-Pesa number,
+         * treat their next ordinary text message as the phone number.
+         */
+        if (!Str::startsWith($text, '/')) {
+            Log::info('Processing phone number input', [
+                'chat_id' => $chatId,
+                'telegram_user_id' => $telegramUserId,
+                'phone_number' => $text,
+            ]);
+
+            $waitingPurchase = Purchase::where(
+                'telegram_id',
+                $telegramUserId
+            )
+                ->whereHas('invoice', function ($query) {
+                    $query->where('payment_provider', 'bitika')
+                        ->where('status', 'awaiting_phone');
+                })
+                ->with('invoice')
+                ->first();
+
+            if ($waitingPurchase && $waitingPurchase->invoice) {
+                Log::info('Found invoice awaiting phone number.', [
+                    'invoice_id' => $waitingPurchase->invoice->id,
+                    'telegram_user_id' => $telegramUserId,
+                ]);
+                $this->initiateBitikaPayment(
+                    $chatId,
+                    $waitingPurchase->invoice,
+                    $text
+                );
+
+                return response()->json(['status' => 'ok']);
+            }
+        }
+
+        $this->telegram->sendMessage(
+            $chatId,
+            '🤖 Use /start to view the available purchase options.'
+        );
 
         return response()->json(['status' => 'ok']);
     }
-    protected function canclelPendingInvoices(string $chatId, string $telegramUserId){
-        $pendingPurchases = Purchase::where('telegram_id', $telegramUserId)
-                                    ->whereHas('invoice', function($q) {
-                                        $q->where('status', 'pending');
-                                    })->get();
 
-        if ($pendingPurchases->isEmpty()) {
-            $this->telegram->sendMessage($chatId, "✅ You have no pending invoices to cancel.");
-            return;
-        }
+    /**
+     * Start the purchase flow.
+     */
+    protected function handlePurchaseCommand(
+        string $chatId,
+        string $telegramUserId,
+        string $fullName,
+        string $username,
+        ?string $clientIp,
+        ?string $command = null
+    ): void {
+        Log::info('Handling purchase command', [
+            'chat_id' => $chatId,
+            'telegram_user_id' => $telegramUserId,
+            'command' => $command,
+        ]);
+        $existingPurchase = Purchase::where(
+            'telegram_id',
+            $telegramUserId
+        )
+            ->whereHas('invoice', function ($query) {
+                $query->whereIn('status', [
+                    'awaiting_phone',
+                    'processing',
+                    'pending',
+                ]);
+            })
+            ->with('invoice')
+            ->first();
 
-        foreach ($pendingPurchases as $purchase) {
-            $invoice = $purchase->invoice;
+        if ($existingPurchase) {
+            Log::info('Found existing purchase.', [
+                'chat_id' => $chatId,
+                'telegram_user_id' => $telegramUserId,
+                'invoice_id' => $existingPurchase->invoice->id,
+            ]);
+            $invoice = $existingPurchase->invoice;
+
+            if ($invoice && $invoice->status === 'awaiting_phone') {
+                $this->telegram->sendMessage(
+                    $chatId,
+                    'You already have a purchase awaiting your M-Pesa '
+                    . "number.\n\n"
+                    . 'Enter the number that should receive the STK Push, '
+                    . 'or send /cancelInvoices to cancel the request.'
+                );
+
+                return;
+            }
+
+            if ($invoice && $invoice->status === 'processing') {
+                Log::info('Purchase is currently processing.', [
+                    'chat_id' => $chatId,
+                    'telegram_user_id' => $telegramUserId,
+                    'invoice_id' => $invoice->id,
+                ]);
+                $this->telegram->sendMessage(
+                    $chatId,
+                    'Your M-Pesa payment request is being processed. '
+                    . 'Please check your phone and wait for confirmation '
+                    . 'before starting another purchase.'
+                );
+
+                return;
+            }
+
             if ($invoice && $invoice->status === 'pending') {
-                $invoice->status = 'cancelled';
-                $invoice->save();
-                Log::info("Cancelled invoice {$invoice->id} for user {$telegramUserId}");
+                Log::info('Purchase is pending payment.', [
+                    'chat_id' => $chatId,
+                    'telegram_user_id' => $telegramUserId,
+                    'invoice_id' => $invoice->id,
+                ]);
+                $expirySeconds = (int) config(
+                    'services.blink.invoice_expiry',
+                    600
+                );
+
+                $expiryDate = $existingPurchase->created_at
+                    ->copy()
+                    ->addSeconds($expirySeconds);
+
+                if (now()->greaterThan($expiryDate)) {
+                    Log::info('Pending invoice has expired.', [
+                        'chat_id' => $chatId,
+                        'telegram_user_id' => $telegramUserId,
+                        'invoice_id' => $invoice->id,
+                    ]);
+                    $invoice->update([
+                        'status' => Invoice::STATUS_EXPIRED,
+                    ]);
+                } else {
+                    Log::info('Pending invoice is still valid.', [
+                        'chat_id' => $chatId,
+                        'telegram_user_id' => $telegramUserId,
+                        'invoice_id' => $invoice->id,
+                    ]);
+                    $this->telegram->sendMessage(
+                        $chatId,
+                        'You already have a pending payment. '
+                        . 'Use /cancelInvoices if you want to cancel '
+                        . 'the request before starting another.'
+                    );
+
+                    return;
+                }
             }
         }
 
-        $this->telegram->sendMessage($chatId, "✅ All your pending invoices have been cancelled.");
-    }
-    protected function isBotOwner(string $telegramUserId): bool
-    {
-        $ownerId = config('services.telegram.owner_id');
-        return $telegramUserId === $ownerId;
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    [
+                        'text' => 'Generate invoice for Instant Access',
+                        'callback_data' => 'buy_type_instant',
+                    ],
+                ],
+                // Add the goal-based option if you want it displayed:
+                // [
+                //     [
+                //         'text' => 'Goal-based Access',
+                //         'callback_data' => 'buy_type_goal',
+                //     ],
+                // ],
+            ],
+        ];
+
+        $message = "1. The amount for fisheries is 7,500 KES.\n"
+            . "2. Select the option below to initiate payment.\n"
+            . "3. Enter the M-Pesa number that should receive the STK Push.\n"
+            . "4. Your materials will be delivered after payment "
+            . "confirmation.\n\n"
+            . 'Only make payments through the bot instructions.';
+
+        $this->telegram->sendMessage(
+            $chatId,
+            $message,
+            $keyboard
+        );
     }
 
     /**
-     * Handle the /reset-group command - removes all non-admin members
+     * Create the invoice and purchase before asking for a phone number.
      */
-    protected function handleResetGroup(string $chatId, string $telegramUserId)
-    {
-        Log::info("Reset group command initiated by {$telegramUserId}");
-        
-        // Send initial status message
-        $this->telegram->sendMessage($chatId, "🔄 Starting group reset... This may take a few moments.");
-        
-        try {
-            // Get all chat members
-            $groupChatId = config('services.telegram.channel_id'); // Ensure we are targeting the correct chat
-            $members = $this->telegram->getChatMembers($groupChatId);
-            
-            if (!$members || empty($members)) {
-                $this->telegram->sendMessage($chatId, "❌ Unable to fetch group members. Make sure bot is admin. Falling back to database members.");
+    protected function processInvoiceGeneration(
+        string $chatId,
+        string $telegramUserId,
+        bool $isInstant,
+        string $fullName,
+        string $username,
+        ?string $clientIp
+    ): void {
+        Log::info('Processing invoice generation', [
+            'chat_id' => $chatId,
+            'telegram_user_id' => $telegramUserId,
+            'is_instant' => $isInstant,
+        ]);
 
-                Log::error("Failed to fetch members for Group chat ID {$groupChatId}.");
+        $existingPurchase = Purchase::where(
+            'telegram_id',
+            $telegramUserId
+        )
+            ->whereHas('invoice', function ($query) {
+                $query->whereIn('status', [
+                    'awaiting_phone',
+                    'processing',
+                    'pending',
+                ]);
+            })
+            ->first();
+
+        if ($existingPurchase) {
+            Log::info('User already has an active purchase.', [
+                'chat_id' => $chatId,
+                'telegram_user_id' => $telegramUserId,
+                'invoice_id' => $existingPurchase->invoice->id,
+            ]);
+            $this->telegram->sendMessage(
+                $chatId,
+                'You already have an active purchase. '
+                . 'Please complete or cancel it before starting another.'
+            );
+
+            return;
+        }
+
+        $amount = $this->getPurchaseAmount($isInstant);
+
+        if ($amount <= 0) {
+            Log::error('Invalid configured purchase amount.', [
+                'instant_buy' => $isInstant,
+                'amount' => $amount,
+            ]);
+
+            $this->telegram->sendMessage(
+                $chatId,
+                'Unable to start a purchase right now. Please try again later.'
+            );
+
+            return;
+        }
+
+        try {
+            $invoice = Invoice::create([
+                'status' => 'awaiting_phone',
+                'payment_provider' => 'bitika',
+                'amount_kes' => $amount,
+                'full_name' => $fullName,
+                'username' => $username,
+                'telegram_client_ip' => $clientIp,
+                'is_instant_buy' => $isInstant,
+            ]);
+
+            Purchase::create([
+                'invoice_id' => $invoice->id,
+                'telegram_id' => $telegramUserId,
+            ]);
+        } catch (Throwable $e) {
+            Log::error('Could not create Telegram purchase.', [
+                'telegram_user_id' => $telegramUserId,
+                'error' => $e->getMessage(),
+            ]);
+
+            $this->telegram->sendMessage(
+                $chatId,
+                'Unable to create your purchase right now. '
+                . 'Please try again later.'
+            );
+
+            return;
+        }
+
+        $this->telegram->sendMessage(
+            $chatId,
+            "💳 *M-Pesa Payment*\n\n"
+            . 'Amount: KES ' . number_format($amount) . "\n\n"
+            . 'Enter the Safaricom M-Pesa number that should receive '
+            . "the STK Push.\n\n"
+            . "Example: 0712345678\n\n"
+            . 'Send /cancelInvoices to cancel this request.',
+            ['parse_mode' => 'Markdown']
+        );
+    }
+
+    /**
+     * Initiate a Bitika STK Push for an invoice.
+     */
+    protected function initiateBitikaPayment(
+        string $chatId,
+        Invoice $invoice,
+        string $phone
+    ): void {
+        Log::info('Initiating Bitika payment', [
+            'chat_id' => $chatId,
+            'invoice_id' => $invoice->id,
+            'phone_number' => $phone,
+        ]);
+        if ($invoice->status !== 'awaiting_phone') {
+            Log::warning('Invoice is not awaiting a phone number.', [
+                'invoice_id' => $invoice->id,
+                'current_status' => $invoice->status,
+            ]);
+            $this->telegram->sendMessage(
+                $chatId,
+                'This payment request is no longer awaiting a phone number.'
+            );
+
+            return;
+        }
+
+        try {
+
+            $phone = $this->formatPhoneNumber($phone);
+        } catch (\InvalidArgumentException $e) {
+            $this->telegram->sendMessage(
+                $chatId,
+                'Invalid Kenyan mobile number. Enter a number such as '
+                . '0712345678 or 254712345678.'
+            );
+
+            return;
+        }
+
+        $amount = (int) $invoice->amount_kes;
+
+        if ($amount <= 0) {
+            Log::error('Invoice has an invalid KES amount.', [
+                'invoice_id' => $invoice->id,
+            ]);
+
+            $this->telegram->sendMessage(
+                $chatId,
+                'Unable to start payment for this invoice. '
+                . 'Please contact support.'
+            );
+
+            return;
+        }
+
+        /*
+         * Persist a single payment attempt before making the external
+         * request. This also prevents a duplicate Telegram update from
+         * creating a second STK Push for the same invoice.
+         */
+        $idempotencyKey = (string) Str::uuid();
+
+        $updated = Invoice::whereKey($invoice->id)
+            ->where('status', 'awaiting_phone')
+            ->update([
+                'mpesa_phone_number' => $phone,
+                'idempotency_key' => $idempotencyKey,
+                'payment_initiated_at' => now(),
+                'payment_error' => null,
+                'status' => 'processing',
+            ]);
+
+        if (!$updated) {
+            Log::warning('Invoice status changed before payment initiation.', [
+                'invoice_id' => $invoice->id,
+                'current_status' => $invoice->status,
+            ]);
+            $this->telegram->sendMessage(
+                $chatId,
+                'This payment request has already been submitted. '
+                . 'Please wait for its status to be confirmed.'
+            );
+
+            return;
+        }
+
+        try {
+            Log::info('Sending STK Push request to Bitika.', [
+                'invoice_id' => $invoice->id,
+                'phone_number' => $phone,
+                'amount_kes' => $amount,
+                'idempotency_key' => $idempotencyKey,
+            ]);
+            $response = $this->bitika->collect(
+                $phone,
+                $amount,
+                $idempotencyKey
+            );
+
+            $data = $response['response'] ?? $response;
+
+            $status = strtolower((string) ($data['status'] ?? ''));
+
+            $transactionCode = $data['transaction_code']
+                ?? $data['transactionCode']
+                ?? null;
+
+            /*
+             * Confirm the exact status and field names against the
+             * response returned by your BitikaPaymentService.
+             */
+            $acceptedStatuses = ['processing', 'pending'];
+
+            if (
+                !$transactionCode
+                || !in_array($status, $acceptedStatuses, true)
+            ) {
+                $invoice->update([
+                    'status' => 'failed',
+                    'payment_error' => 'Bitika did not confirm STK initiation.',
+                    'payment_metadata' => $data,
+                ]);
+
+                Log::warning('Bitika did not accept the payment request.', [
+                    'invoice_id' => $invoice->id,
+                    'response' => $data,
+                ]);
+
+                $this->telegram->sendMessage(
+                    $chatId,
+                    'Unable to confirm that the STK Push was initiated. '
+                    . 'Please contact support before attempting another payment.'
+                );
+
+                return;
+            }
+
+            $invoice->update([
+                'bitika_transaction_code' => $transactionCode,
+                'payment_metadata' => $data,
+            ]);
+
+            $this->telegram->sendMessage(
+                $chatId,
+                "📲 *STK Push requested*\n\n"
+                . "Phone: {$phone}\n"
+                . 'Amount: KES ' . number_format($amount) . "\n"
+                . "Reference: {$transactionCode}\n\n"
+                . 'Check your phone and follow the M-Pesa prompt. '
+                . 'Your purchase will be delivered after payment is confirmed.',
+                ['parse_mode' => 'Markdown']
+            );
+        } catch (Throwable $e) {
+            /*
+             * A timeout does not necessarily mean Bitika failed to
+             * receive the request. Keep the invoice processing to
+             * avoid accidentally initiating a duplicate payment.
+             * Reconcile it using Bitika's transaction-status API.
+             */
+            $invoice->update([
+                'payment_error' => 'Could not confirm the STK initiation response.',
+            ]);
+
+            Log::error('Bitika STK initiation response was uncertain.', [
+                'invoice_id' => $invoice->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $this->telegram->sendMessage(
+                $chatId,
+                'We could not confirm the payment request status. '
+                . 'Please do not retry the payment yet. '
+                . 'Contact support so the transaction can be checked.'
+            );
+        }
+    }
+
+    /**
+     * Return the configured amount for the selected purchase type.
+     *
+     * Bitika amounts are in KES, not millisatoshis.
+     */
+    protected function getPurchaseAmount(bool $isInstant): int
+    {
+        if ($isInstant) {
+            return (int) config(
+                'services.bitika.instant_buy_amount',
+                config('services.blink.instant_buy_amount', 7500)
+            );
+        }
+
+        return (int) config(
+            'services.bitika.invoice_amount',
+            config('services.blink.invoice_amount', 100)
+        );
+    }
+
+    /**
+     * Normalize a Kenyan mobile number to 254XXXXXXXXX.
+     */
+    protected function formatPhoneNumber(string $phone): string
+    {
+        $phone = trim($phone);
+
+        // Allow common formatting characters such as spaces and hyphens.
+        $cleaned = preg_replace('/[\s().-]+/', '', $phone);
+
+        if (!is_string($cleaned)) {
+            throw new \InvalidArgumentException(
+                'Invalid Kenyan mobile phone number.'
+            );
+        }
+
+        if (!preg_match('/^(?:\+?254|0)?[71]\d{8}$/', $cleaned)) {
+            throw new \InvalidArgumentException(
+                'Invalid Kenyan mobile phone number.'
+            );
+        }
+
+        $digits = preg_replace('/\D/', '', $cleaned);
+
+        if (!is_string($digits)) {
+            throw new \InvalidArgumentException(
+                'Invalid Kenyan mobile phone number.'
+            );
+        }
+
+        if (str_starts_with($digits, '0')) {
+            return '254' . substr($digits, 1);
+        }
+
+        if (str_starts_with($digits, '254')) {
+            return $digits;
+        }
+
+        if (
+            strlen($digits) === 9
+            && (
+                str_starts_with($digits, '7')
+                || str_starts_with($digits, '1')
+            )
+        ) {
+            return '254' . $digits;
+        }
+
+        throw new \InvalidArgumentException(
+            'Invalid Kenyan mobile phone number.'
+        );
+    }
+
+    /**
+     * Cancel invoices that have not yet entered payment processing.
+     *
+     * A processing STK Push is deliberately not cancelled locally:
+     * Bitika may already have sent it to the customer's phone.
+     */
+    protected function cancelPendingInvoices(
+        string $chatId,
+        string $telegramUserId
+    ): void {
+        $purchases = Purchase::where('telegram_id', $telegramUserId)
+            ->whereHas('invoice', function ($query) {
+                $query->whereIn('status', [
+                    'awaiting_phone',
+                    'pending',
+                ]);
+            })
+            ->with('invoice')
+            ->get();
+
+        if ($purchases->isEmpty()) {
+            $processingPurchase = Purchase::where(
+                'telegram_id',
+                $telegramUserId
+            )
+                ->whereHas('invoice', function ($query) {
+                    $query->where('status', 'processing');
+                })
+                ->exists();
+
+            $this->telegram->sendMessage(
+                $chatId,
+                $processingPurchase
+                    ? 'Your STK Push may already be active. '
+                        . 'It cannot be safely cancelled here; '
+                        . 'please wait for confirmation or contact support.'
+                    : 'You have no cancellable payment requests.'
+            );
+
+            return;
+        }
+
+        foreach ($purchases as $purchase) {
+            $invoice = $purchase->invoice;
+
+            if (
+                $invoice
+                && in_array($invoice->status, [
+                    'awaiting_phone',
+                    'pending',
+                ], true)
+            ) {
+                $invoice->update([
+                    'status' => Invoice::STATUS_CANCELLED,
+                ]);
+
+                Log::info('Invoice cancelled by Telegram user.', [
+                    'invoice_id' => $invoice->id,
+                    'telegram_user_id' => $telegramUserId,
+                ]);
+            }
+        }
+
+        $this->telegram->sendMessage(
+            $chatId,
+            'Your cancellable payment requests have been cancelled.'
+        );
+    }
+
+    /**
+     * Check whether a Telegram user is the configured bot owner.
+     */
+    protected function isBotOwner(string $telegramUserId): bool
+    {
+        $ownerId = config('services.telegram.owner_id');
+
+        return $ownerId !== null
+            && (string) $ownerId === $telegramUserId;
+    }
+
+    /**
+     * Reset the configured Telegram group, retaining administrators.
+     */
+    protected function handleResetGroup(
+        string $chatId,
+        string $telegramUserId
+    ): void {
+        Log::info('Group reset command initiated.', [
+            'telegram_user_id' => $telegramUserId,
+        ]);
+
+        $this->telegram->sendMessage(
+            $chatId,
+            '🔄 Starting group reset... This may take a few moments.'
+        );
+
+        try {
+            $groupChatId = config('services.telegram.channel_id');
+
+            if (!$groupChatId) {
+                $this->telegram->sendMessage(
+                    $chatId,
+                    '❌ The Telegram group ID is not configured.'
+                );
+
+                return;
+            }
+
+            $members = $this->telegram->getChatMembers($groupChatId);
+
+            if (!is_array($members) || empty($members)) {
+                Log::error('Unable to retrieve Telegram group members.', [
+                    'group_chat_id' => $groupChatId,
+                ]);
+
+                $this->telegram->sendMessage(
+                    $chatId,
+                    '❌ Unable to fetch group members. '
+                    . 'Confirm that the bot has the required permissions.'
+                );
+
+                return;
             }
 
             $totalMembers = count($members);
             $removedCount = 0;
             $adminCount = 0;
             $failedCount = 0;
-            
-            // Send progress update
-            $this->telegram->sendMessage($chatId, "📊 Found {$totalMembers} members. Removing non-admin users...");
-            
+
+            $this->telegram->sendMessage(
+                $chatId,
+                "📊 Found {$totalMembers} members. "
+                . 'Removing non-admin users...'
+            );
+
             foreach ($members as $member) {
-                $userId = $member['user']['id'];
-                $userName = $member['user']['username'] ?? $member['user']['first_name'] ?? 'Unknown';
+                $user = $member['user'] ?? [];
+                $userId = $user['id'] ?? null;
                 $status = $member['status'] ?? '';
-                
-                // Skip if user is an administrator or creator
-                if ($status === 'administrator' || $status === 'creator') {
+
+                if (!$userId) {
+                    $failedCount++;
+                    continue;
+                }
+
+                $userName = $user['username']
+                    ?? $user['first_name']
+                    ?? 'Unknown';
+
+                if (in_array($status, ['administrator', 'creator'], true)) {
                     $adminCount++;
-                    Log::info("Skipping admin/creator", [
-                        'user_id' => $userId,
-                        'name' => $userName,
-                        'status' => $status
-                    ]);
                     continue;
                 }
-                
-                // Skip the bot itself
-                if ($userId === config('services.telegram.bot_user_id')) {
+
+                // Avoid removing the bot itself.
+                if (
+                    (string) $userId
+                    === (string) config('services.telegram.bot_user_id')
+                ) {
                     continue;
                 }
-                
-                // Remove the user
-                $removed = $this->telegram->kickChatMember($groupChatId, $userId);
-                
+
+                $removed = $this->telegram->kickChatMember(
+                    $groupChatId,
+                    $userId
+                );
+
                 if ($removed) {
                     $removedCount++;
-                    Log::info("Removed user", [
+
+                    Log::info('Removed Telegram group member.', [
                         'user_id' => $userId,
-                        'name' => $userName
+                        'username' => $userName,
                     ]);
                 } else {
                     $failedCount++;
-                    Log::warning("Failed to remove user", [
+
+                    Log::warning('Could not remove Telegram group member.', [
                         'user_id' => $userId,
-                        'name' => $userName
+                        'username' => $userName,
                     ]);
                 }
-                
-                // Small delay to avoid hitting rate limits
-                usleep(50000); // 50ms delay
+
+                // Small delay to reduce the risk of hitting API limits.
+                usleep(50000);
             }
-            
-            // Send summary
+
             $summary = "✅ *Group Reset Complete!*\n\n"
-                     . "📊 *Statistics:*\n"
-                     . "├ Total members: {$totalMembers}\n"
-                     . "├ 👑 Admins kept: {$adminCount}\n"
-                     . "├ 🗑️ Removed users: {$removedCount}\n"
-                     . "└ ❌ Failed removals: {$failedCount}\n\n"
-                     . "🔒 The group has been reset. Only admins remain.";
-            
-            $this->telegram->sendMessage($chatId, $summary);
-            Log::info("Group reset completed", [
+                . "📊 *Statistics:*\n"
+                . "├ Total members: {$totalMembers}\n"
+                . "├ 👑 Admins kept: {$adminCount}\n"
+                . "├ 🗑️ Removed users: {$removedCount}\n"
+                . "└ ❌ Failed removals: {$failedCount}\n\n"
+                . '🔒 Group reset finished.';
+
+            $this->telegram->sendMessage(
+                $chatId,
+                $summary,
+                ['parse_mode' => 'Markdown']
+            );
+
+            Log::info('Telegram group reset completed.', [
                 'total' => $totalMembers,
                 'removed' => $removedCount,
                 'admins_kept' => $adminCount,
-                'failed' => $failedCount
+                'failed' => $failedCount,
             ]);
-            
-        } catch (\Exception $e) {
-            Log::error("Error during group reset", [
+        } catch (Throwable $e) {
+            Log::error('Error during Telegram group reset.', [
+                'telegram_user_id' => $telegramUserId,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
             ]);
-            $this->telegram->sendMessage($chatId, "❌ Error during group reset: " . $e->getMessage());
+
+            $this->telegram->sendMessage(
+                $chatId,
+                '❌ An error occurred during the group reset. '
+                . 'Check the application logs for details.'
+            );
         }
     }
-
-
-    protected function handlePurchaseCommand(string $chatId, string $telegramUserId, string $fullName, string $username, string $clientIp,$text=null)
-    {
-        Log::info("Handling purchase command for user {$username} ({$telegramUserId}) with text: {$text}");
-        
-        // 1. Check for existing pending invoices (Keep your existing logic)
-        $existingPurchase = Purchase::where('telegram_id', $telegramUserId)
-                                    ->whereHas('invoice', function($q) {
-                                        $q->where('status', 'pending');
-                                    })->first();
-
-        if ($existingPurchase) {
-            $expireInSeconds = (int) config('services.blink.invoice_expiry', 600);
-            $expireDate = $existingPurchase->created_at->addSeconds($expireInSeconds);
-
-            if (now()->greaterThan($expireDate)) {
-                $existingPurchase->invoice->update(['status' => 'expired']);
-            } else {
-                $this->telegram->sendMessage($chatId, "⏳ You already have a pending payment. Please use /cancelInvoices if you want to start over.");
-                return;
-            }
-        }
-
-        $subject=Subject::where('name','fisheries_pastpaper')->first();
-        // // 2. Instead of creating invoice, ask for the TYPE of purchase
-        // if($text === '/start'){
-        //     $welcomeText = "Welcome to the UON Law Revision materials Bot!\n\n"
-        //                  . "Fisheries pastpapers are free but we charge a fee for compiled questions that have  high chance of being tested in exams.\n\n"
-        //                  . "Ukipunguza maringo and press /buy you'll get instructions for a 'prophetic version' of the 'past paper' that is kama unataka kusaidika, haubembelezwi.\n";
-            
-
-        //     $this->telegram->fulfillSubjectImages($telegramUserId, $subject);
-        //     $this->telegram->sendMessage($chatId, $welcomeText);
-            
-        // }
-        // if($text === '/buy'){
-
-            $keyboard = [
-                'inline_keyboard' => [
-                    [
-                        ['text' => 'Generate invoice for Instant Access', 'callback_data' => 'buy_type_instant'],
-
-                    ]
-                ]
-            ];
-
-            $text = "1.The amount for fisheries is 7,500 (Click the button below to generate invoice).\n"
-                . "2.Liaise with your friends, raise the money and follow instructions to process.\n"
-                . "3.Paper will be sent to your inbox after payment.\n"
-                . "4.Only share the paper with those who have contributed.\n"
-                . "5.Gatekeep the paper to avoid jeopardising this exercise.\n"
-                . "6.Mtu kama hajachang'a wacha asome, hatufanyi charity work hapa.";
-
-            $this->telegram->sendMessage($chatId, $text, $keyboard);
-
-        // }
-    }
-
-    protected function processInvoiceGeneration(string $chatId, string $telegramUserId, bool $isInstant, $fullName, $username, $clientIp)
-    {
-        // Decide amount based on choice
-        $amount = $isInstant 
-            ? (int) config('services.blink.instant_buy_amount', 500) 
-            : (int) config('services.blink.invoice_amount', 100);
-
-        $this->telegram->sendMessage($chatId, "⏳ Generating your " . ($isInstant ? "Instant" : "Goal-based") . " invoice...");
-
-        $invoiceExpiry = config('services.blink.invoice_expiry', 86400);
-        $blinkInvoice = $this->blink->createInvoice($amount, $invoiceExpiry);
-
-        if (!$blinkInvoice) {
-            $this->telegram->sendMessage($chatId, "❌ Payment system error.");
-            return;
-        }
-
-        // Store in DB
-        $invoice = Invoice::create([
-            'blink_id' => $blinkInvoice['id'],
-            'payment_hash' => $blinkInvoice['payment_hash'],
-            'payment_request' => $blinkInvoice['payment_request'],
-            'amount_msat' => $blinkInvoice['amount_msat'],
-            'status' => 'pending',
-            'full_name' => $fullName ?? 'No name',
-            'username' => $username ?? 'No username',
-            'telegram_client_ip' => $clientIp ?? 'No IP',
-            'is_instant_buy' => $isInstant, // Store the choice here
-        ]);
-
-        Purchase::create([
-            'invoice_id' => $invoice->id,
-            'telegram_id' => $telegramUserId,
-        ]);
-
-        // Send the payment instructions
-        $keyboard = [
-            'inline_keyboard' => [[['text' => '💸 Pay via M-Pesa (Bitika)', 'url' => 'https://bitika.xyz']]]
-        ];
-
-        $mainMessageText = sprintf(
-            "Payment Instructions for the paper:\n\n".
-            "1️⃣ Click the button below to open Bitika\n".
-            "2️⃣ Copy the invoice from the NEXT message(copy and paste only the code)\n".
-            "3️⃣ Paste it in Bitika and complete payment via M-Pesa\n".
-            "4️⃣ Wait a few seconds for confirmation\n\n".
-            "You will Receive the paper once the payment is processed\n\n".
-            "⏳ Invoice expires in the next 24hrs"
-        );
-
-        $this->telegram->sendMessage($chatId, $mainMessageText, $keyboard);
-        
-        // Send the raw blink invoice for easy copying
-        $this->telegram->sendMessage($chatId, $invoice->payment_request);
-    }
-
 }
