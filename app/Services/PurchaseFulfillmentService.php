@@ -83,11 +83,11 @@ class PurchaseFulfillmentService
         $this->telegram->sendMessage(
             $telegramUserId,
             "✅ *Payment Confirmed!*\n\n"
-            . "Join the group: {$inviteLink}",
+            . "Join the VIP Channel: {$inviteLink}",
             ['parse_mode' => 'Markdown']
         );
 
-        Log::info('Goal-based purchase fulfilled.', [
+        Log::info('VIP Channel purchase fulfilled.', [
             'invoice_id' => $invoice->id,
             'telegram_user_id' => $telegramUserId,
         ]);

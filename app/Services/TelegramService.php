@@ -81,6 +81,7 @@ public function sendPhoto(string $chatId, string $photo, ?string $caption = null
  */
 public function fulfillSubjectImages(string $chatId, \App\Models\Subject $subject): bool
 {
+    Log::info("Fulfilling images for subject: {$subject->name} to chat ID: {$chatId}");
     $images = $subject->images()->orderBy('sort_order')->get();
     if ($images->isEmpty()) return false;
 
@@ -107,6 +108,7 @@ public function fulfillSubjectImages(string $chatId, \App\Models\Subject $subjec
  */
 private function resolveImagePath(string $path): ?string
 {
+    Log::info("Resolving image path for: {$path}");
     $possiblePaths = [
         storage_path("app/public/{$path}"),
         storage_path("app/{$path}"),
