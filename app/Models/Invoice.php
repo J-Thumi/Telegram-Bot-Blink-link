@@ -28,6 +28,14 @@ class Invoice extends Model
         'satoshis_paid',
         'paid_at',
         'is_instant_buy',
+        'mpesa_phone_number',
+                'payment_provider',
+                'bitika_transaction_code',
+                'idempotency_key',
+                'payment_metadata',
+                'payment_initiated_at',
+                'payment_error',
+                'amount_kes',
         
     ];
 
@@ -41,6 +49,9 @@ class Invoice extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'is_instant_buy' => 'boolean',
+         'payment_metadata' => 'array',
+        'payment_initiated_at' => 'datetime',
+        'paid_at' => 'datetime',
     ];
 
     /**
