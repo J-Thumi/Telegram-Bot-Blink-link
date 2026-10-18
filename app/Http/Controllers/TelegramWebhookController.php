@@ -250,26 +250,25 @@ class TelegramWebhookController extends Controller
             'inline_keyboard' => [
                 [
                     [
-                        'text' => 'Want papers on your chat with some functionalities not disabled like screenshots, forward etc',
+                        'text' => 'Want papers on your chat',
                         'callback_data' => 'buy_type_instant',
                     ],
                 ],
                 [
                     [
-                        'text' => 'Wish to Access VIP Channel with some functionalities disabled like screenshots, forward etc',
+                        'text' => 'Access VIP Channel',
                         'callback_data' => 'buy_type_goal',
                     ],
                 ],
             ],
         ];
 
-        $message = "1. The amount for getting papers on your chat with someone functionalities not disabled like screenshots, forward etc is 20,000 KES.\n"
+        $message = "1. The amount for getting papers on your chat with some functionalities not disabled like screenshots, forward etc is 20,000 KES.\n"
             . "2. You can also choose to join our VIP channel for 15,000 but some features like screenshots and forwarding messages are disabled.\n"
-            . "3. Select the option that you want below to initiate payment.\n"
-            . "4. If you wish to join the channel a single use link will be provided after payment is successful.\n"
-            . "4. If you want to get papers on your chat with someone functionalities not disabled like screenshots, forward etc they will be sent once available and payment is successful.\n"
-            . "5. Enter the M-Pesa number that should receive the STK Push.\n"
-            . "6. Your materials will be delivered after payment confirmation.\n\n"
+            . "3. Select the option that you want to initiate payment.\n"
+            . "4. If you wish to join the channel, a single use link will be provided after payment is successful.\n"
+            . "4. If you want to get papers on your chat, they will be sent to your inbox once payment is successful and they are available.\n"
+            . "5. Enter the M-Pesa number that should receive the STK Push.\n\n"
             . 'Only make payments through the bot instructions.';
 
         $this->telegram->sendMessage($chatId, $message, $keyboard);
